@@ -6,7 +6,7 @@ use std::{
 use thiserror::Error;
 
 use super::{
-    access::AccessFlags,
+    access::{ClassAccessFlags, FieldAccessFlags, MethodAccessFlags},
     reader::{ByteReadable, ByteReader, ReadError},
 };
 
@@ -28,11 +28,12 @@ mod test {
 pub struct RawClassFile<'a> {
     pub version: SourceVersion,
     pub constant_pool: RawConstantPool<'a>,
-    pub access_flags: AccessFlags,
+    pub access_flags: ClassAccessFlags,
     pub this_class: ConstantPoolIndex,
     pub super_class: ConstantPoolIndex,
     pub interfaces: Vec<ConstantPoolIndex>,
     pub fields: Vec<RawField<'a>>,
+    pub methods: Vec<RawMethod<'a>>,
 }
 
 impl<'a> RawClassFile<'a> {
@@ -68,11 +69,12 @@ impl<'a> ByteReadable<'a> for RawClassFile<'a> {
 
         let version = SourceVersion::read(r)?;
         let constant_pool = RawConstantPool::read(r)?;
-        let access_flags = AccessFlags::read(r)?;
+        let access_flags = ClassAccessFlags::read(r)?;
         let this_class = ConstantPoolIndex::read(r)?;
         let super_class = ConstantPoolIndex::read(r)?;
         let interfaces = r.u2_list(false)?;
         let fields = r.u2_list(false)?;
+        let methods = r.u2_list(false)?;
 
         Ok(Self {
             version,
@@ -82,6 +84,7 @@ impl<'a> ByteReadable<'a> for RawClassFile<'a> {
             super_class,
             interfaces,
             fields,
+            methods,
         })
     }
 }
@@ -398,7 +401,7 @@ impl<'a> ByteReadable<'a> for RawConstantItem<'a> {
 
 #[derive(Debug)]
 pub struct RawField<'a> {
-    pub access_flags: AccessFlags,
+    pub access_flags: FieldAccessFlags,
     pub name_index: ConstantPoolIndex,
     pub descriptor_index: ConstantPoolIndex,
     pub attributes: Vec<RawAttribute<'a>>,
@@ -408,7 +411,7 @@ impl<'a> ByteReadable<'a> for RawField<'a> {
     type Error = ReadError;
 
     fn read(r: &mut ByteReader<'a>) -> Result<Self, Self::Error> {
-        let access_flags = AccessFlags::read(r)?;
+        let access_flags = FieldAccessFlags::read(r)?;
         let name_index = ConstantPoolIndex::read(r)?;
         let descriptor_index = ConstantPoolIndex::read(r)?;
         let attributes = r.u2_list(false)?;
@@ -437,6 +440,31 @@ impl<'a> ByteReadable<'a> for RawAttribute<'a> {
         Ok(Self {
             name_index,
             info: slice,
+        })
+    }
+}
+
+#[derive(Debug)]
+pub struct RawMethod<'a> {
+    pub access_flags: MethodAccessFlags,
+    pub name_index: ConstantPoolIndex,
+    pub descriptor_index: ConstantPoolIndex,
+    pub attributes: Vec<RawAttribute<'a>>,
+}
+
+impl<'a> ByteReadable<'a> for RawMethod<'a> {
+    type Error = ReadError;
+
+    fn read(r: &mut ByteReader<'a>) -> Result<Self, Self::Error> {
+        let access_flags = MethodAccessFlags::read(r)?;
+        let name_index = ConstantPoolIndex::read(r)?;
+        let descriptor_index = ConstantPoolIndex::read(r)?;
+        let attributes = r.u2_list(false)?;
+        Ok(Self {
+            access_flags,
+            name_index,
+            descriptor_index,
+            attributes,
         })
     }
 }

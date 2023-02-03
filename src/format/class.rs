@@ -30,6 +30,7 @@ pub struct RawClassFile<'a> {
     pub constant_pool: RawConstantPool<'a>,
     pub access_flags: AccessFlags,
     pub this_class: ConstantPoolIndex,
+    pub super_class: ConstantPoolIndex,
 }
 
 impl<'a> RawClassFile<'a> {
@@ -67,12 +68,14 @@ impl<'a> ByteReadable<'a> for RawClassFile<'a> {
         let constant_pool = RawConstantPool::read(r)?;
         let access_flags = AccessFlags::read(r)?;
         let this_class = ConstantPoolIndex::read(r)?;
+        let super_class = ConstantPoolIndex::read(r)?;
 
         Ok(Self {
             version,
             constant_pool,
             access_flags,
             this_class,
+            super_class,
         })
     }
 }

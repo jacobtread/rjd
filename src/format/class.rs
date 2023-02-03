@@ -5,7 +5,10 @@ use std::{
 
 use thiserror::Error;
 
-use super::reader::{ByteReadable, ByteReader, ReadError};
+use super::{
+    access::AccessFlags,
+    reader::{ByteReadable, ByteReader, ReadError},
+};
 
 #[cfg(test)]
 mod test {
@@ -25,6 +28,7 @@ mod test {
 pub struct RawClassFile<'a> {
     pub version: SourceVersion,
     pub constant_pool: RawConstantPool<'a>,
+    pub access_flags: AccessFlags,
 }
 
 impl<'a> RawClassFile<'a> {
@@ -60,10 +64,12 @@ impl<'a> ByteReadable<'a> for RawClassFile<'a> {
 
         let version = SourceVersion::read(r)?;
         let constant_pool = RawConstantPool::read(r)?;
+        let access_flags = AccessFlags::read(r)?;
 
         Ok(Self {
             version,
             constant_pool,
+            access_flags,
         })
     }
 }
@@ -236,7 +242,7 @@ impl ByteReadable<'_> for RawNameAndType {
 /// Represents an item within the constant pool that is
 /// not yet resolved
 #[derive(Debug)]
-enum RawConstantItem<'a> {
+pub enum RawConstantItem<'a> {
     Class {
         name_index: ConstantPoolIndex,
     },
@@ -280,6 +286,7 @@ impl<'a> ByteReadable<'a> for RawConstantItem<'a> {
 
     fn read(r: &mut ByteReader<'a>) -> Result<RawConstantItem<'a>, Self::Error> {
         let tag = r.u1()?;
+        println!("READ {tag}");
         Ok(match tag {
             // CONSTANT_Class
             7 => {

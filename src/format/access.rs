@@ -1,4 +1,4 @@
-use super::reader::{ByteReadable, ReadError};
+use super::reader::{ByteReadable, ByteReader, ReadError};
 use bitflags::bitflags;
 
 // Flag Name	    Value	Interpretation
@@ -25,10 +25,10 @@ bitflags! {
 
 }
 
-impl<'a> ByteReadable<'a> for AccessFlags {
+impl ByteReadable<'_> for AccessFlags {
     type Error = ReadError;
 
-    fn read(r: &mut super::reader::ByteReader<'a>) -> Result<Self, Self::Error> {
+    fn read(r: &mut ByteReader<'_>) -> Result<Self, Self::Error> {
         let bits = r.u2()?;
         Ok(AccessFlags::from_bits_truncate(bits))
     }

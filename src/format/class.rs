@@ -29,6 +29,7 @@ pub struct RawClassFile<'a> {
     pub version: SourceVersion,
     pub constant_pool: RawConstantPool<'a>,
     pub access_flags: AccessFlags,
+    pub this_class: ConstantPoolIndex,
 }
 
 impl<'a> RawClassFile<'a> {
@@ -65,11 +66,13 @@ impl<'a> ByteReadable<'a> for RawClassFile<'a> {
         let version = SourceVersion::read(r)?;
         let constant_pool = RawConstantPool::read(r)?;
         let access_flags = AccessFlags::read(r)?;
+        let this_class = ConstantPoolIndex::read(r)?;
 
         Ok(Self {
             version,
             constant_pool,
             access_flags,
+            this_class,
         })
     }
 }
@@ -286,7 +289,6 @@ impl<'a> ByteReadable<'a> for RawConstantItem<'a> {
 
     fn read(r: &mut ByteReader<'a>) -> Result<RawConstantItem<'a>, Self::Error> {
         let tag = r.u1()?;
-        println!("READ {tag}");
         Ok(match tag {
             // CONSTANT_Class
             7 => {
@@ -318,25 +320,25 @@ impl<'a> ByteReadable<'a> for RawConstantItem<'a> {
 
             // CONSTANT_Integer
             3 => {
-                let value = r.i32()?;
+                let value = i32::read(r)?;
                 Self::Integer(value)
             }
 
             // CONSTANT_Float
             4 => {
-                let value = r.f32()?;
+                let value = f32::read(r)?;
                 Self::Float(value)
             }
 
             // CONSTANT_Long
             5 => {
-                let value = r.i64()?;
+                let value = i64::read(r)?;
                 Self::Long(value)
             }
 
             // CONSTANT_Double
             6 => {
-                let value = r.f64()?;
+                let value = f64::read(r)?;
                 Self::Double(value)
             }
 

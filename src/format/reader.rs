@@ -68,30 +68,6 @@ impl<'a> ByteReader<'a> {
         Ok(value)
     }
 
-    pub fn i32(&mut self) -> ReadResult<i32> {
-        let value = self.slice_4()?;
-        let value = i32::from_be_bytes(value);
-        Ok(value)
-    }
-
-    pub fn f32(&mut self) -> ReadResult<f32> {
-        let value = self.slice_4()?;
-        let value = f32::from_be_bytes(value);
-        Ok(value)
-    }
-
-    pub fn i64(&mut self) -> ReadResult<i64> {
-        let value = self.slice_8()?;
-        let value = i64::from_be_bytes(value);
-        Ok(value)
-    }
-
-    pub fn f64(&mut self) -> ReadResult<f64> {
-        let value = self.slice_8()?;
-        let value = f64::from_be_bytes(value);
-        Ok(value)
-    }
-
     /// Checks if the buffer has atleast the provided `amount`
     /// after the current cusor position
     pub fn reserve(&self, amount: usize) -> ReadResult<()> {
@@ -119,18 +95,53 @@ impl<'a> ByteReader<'a> {
         let mut list = Vec::with_capacity(count as usize);
         for _ in 0..count {
             let value = R::read(self)?;
-            dbg!(&value);
             list.push(value);
         }
         Ok(list)
     }
 
-    pub fn read<R: ByteReadable<'a>>(&mut self) -> Result<R, R::Error> {
-        R::read(self)
-    }
-
     pub fn remaining(&self) -> usize {
         self.buffer.len() - self.cursor
+    }
+}
+
+impl ByteReadable<'_> for i32 {
+    type Error = ReadError;
+
+    fn read(r: &mut ByteReader<'_>) -> Result<Self, Self::Error> {
+        let value = r.slice_4()?;
+        let value = i32::from_be_bytes(value);
+        Ok(value)
+    }
+}
+
+impl ByteReadable<'_> for f32 {
+    type Error = ReadError;
+
+    fn read(r: &mut ByteReader<'_>) -> Result<Self, Self::Error> {
+        let value = r.slice_4()?;
+        let value = f32::from_be_bytes(value);
+        Ok(value)
+    }
+}
+
+impl ByteReadable<'_> for i64 {
+    type Error = ReadError;
+
+    fn read(r: &mut ByteReader<'_>) -> Result<Self, Self::Error> {
+        let value = r.slice_8()?;
+        let value = i64::from_be_bytes(value);
+        Ok(value)
+    }
+}
+
+impl ByteReadable<'_> for f64 {
+    type Error = ReadError;
+
+    fn read(r: &mut ByteReader<'_>) -> Result<Self, Self::Error> {
+        let value = r.slice_8()?;
+        let value = f64::from_be_bytes(value);
+        Ok(value)
     }
 }
 

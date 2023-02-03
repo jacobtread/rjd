@@ -71,7 +71,7 @@ impl<'a> ByteReader<'a> {
     /// Checks if the buffer has atleast the provided `amount`
     /// after the current cusor position
     pub fn reserve(&self, amount: usize) -> ReadResult<()> {
-        if self.cursor + amount >= self.buffer.len() {
+        if self.cursor + amount > self.buffer.len() {
             Err(ReadError::NotEnoughBytes {
                 length: self.buffer.len(),
                 cursor: self.cursor,

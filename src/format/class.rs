@@ -34,6 +34,7 @@ pub struct RawClassFile<'a> {
     pub interfaces: Vec<ConstantPoolIndex>,
     pub fields: Vec<RawField<'a>>,
     pub methods: Vec<RawMethod<'a>>,
+    pub attributes: Vec<RawAttribute<'a>>,
 }
 
 impl<'a> RawClassFile<'a> {
@@ -75,6 +76,7 @@ impl<'a> ByteReadable<'a> for RawClassFile<'a> {
         let interfaces = r.u2_list(false)?;
         let fields = r.u2_list(false)?;
         let methods = r.u2_list(false)?;
+        let attributes = r.u2_list(false)?;
 
         Ok(Self {
             version,
@@ -85,6 +87,7 @@ impl<'a> ByteReadable<'a> for RawClassFile<'a> {
             interfaces,
             fields,
             methods,
+            attributes,
         })
     }
 }

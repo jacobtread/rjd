@@ -202,14 +202,26 @@ pub struct Method<'a> {
 pub enum Attribute<'a> {
     ConstantValue(ConstantPoolIndex),
     Code(Code<'a>),
-    StackMapTable,
-    Exceptions,
-    InnerClasses,
-    EnclosingMethod,
+    StackMapTable {
+        bytes: &'a [u8],
+    },
+    Exceptions {
+        values: Vec<ClassName<'a>>,
+    },
+    InnerClasses {
+        inner_class_info: ClassName<'a>,
+        outer_class_info: Option<ClassName<'a>>,
+        inner_name: &'a str,
+        inner_class_access_flags: ClassAccessFlags,
+    },
+    EnclosingMethod {
+        class: ClassName<'a>,
+        method_index: ConstantPoolIndex,
+    },
     Synthetic,
-    Signature,
-    SourceFile,
-    SourceDebugExtension,
+    Signature(&'a str),
+    SourceFile(&'a str),
+    SourceDebugExtension(&'a [u8]),
     LineNumberTable,
     LocalVariableTable,
     LocalVariableTypeTable,
@@ -223,6 +235,8 @@ pub enum Attribute<'a> {
     AnnotationDefault,
     BootstrapMethods,
     MethodParameters,
+
+    Other(&'a str, &'a [u8]),
 }
 
 #[derive(Debug)]
@@ -242,3 +256,5 @@ pub struct ExceptionTableEntry {
     pub handler_pc: u16,
     pub catch_type: ConstantPoolIndex,
 }
+
+pub struct LineNumberTableEntry {}

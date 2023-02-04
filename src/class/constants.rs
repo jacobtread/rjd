@@ -120,7 +120,6 @@ impl FromStr for FieldType {
     type Err = FieldTypeError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        println!("{}", s);
         let mut chars = s.chars();
         Self::from_chars(&mut chars)
     }
@@ -182,7 +181,6 @@ impl FieldType {
             'S' => FieldType::Short,
             'Z' => FieldType::Boolean,
             value => {
-                println!("{}", value);
                 return Err(FieldTypeError::Unknown);
             }
         })
@@ -231,10 +229,15 @@ impl Display for FieldType {
             Self::Float => "float",
             Self::Int => "int",
             Self::Long => "long",
-            Self::Object(value) => {
-                let value = value.replace("/", ".");
-                return f.write_str(&value);
-            }
+            Self::Object(value) => match ObjectPath::from_str(value) {
+                Ok(value) => {
+                    return f.write_str(value.class);
+                }
+                Err(_) => {
+                    let value = value.replace("/", ".");
+                    return f.write_str(&value);
+                }
+            },
             Self::Short => "short",
             Self::Boolean => "boolean",
             Self::Array { dim, ty } => {

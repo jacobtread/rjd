@@ -1,3 +1,5 @@
+use std::fmt::{Display, Write};
+
 use thiserror::Error;
 
 use crate::format::{
@@ -26,7 +28,7 @@ mod test {
         let file = read("Test.class").unwrap();
         let class_file = RawClassFile::try_read(&file).unwrap();
         let class_file = ClassFile::try_from(class_file).unwrap();
-        dbg!(class_file);
+        println!("{}", class_file)
     }
 }
 
@@ -45,6 +47,39 @@ pub struct ClassFile<'a> {
     pub methods: Vec<Method<'a>>,
 
     pub attributes: Vec<RawAttribute<'a>>,
+}
+
+impl Display for ClassFile<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let this_class = &self.this_class.0;
+        let package = &this_class.packages;
+
+        if package.len() > 0 {
+            writeln!(f, "package {};", package.join("."))?;
+        }
+
+        f.write_char('\n')?;
+
+        self.access_flags.fmt(f)?;
+
+        f.write_char(' ')?;
+        f.write_str(this_class.class)?;
+        f.write_str(" {\n\n")?;
+
+        for field in &self.fields {
+            f.write_str("  ")?;
+            field.access_flags.fmt(f)?;
+            field.descriptor.fmt(f)?;
+            f.write_char(' ')?;
+            f.write_str(field.name)?;
+            f.write_str(";\n")?;
+        }
+        f.write_char('\n')?;
+
+        f.write_str("}")?;
+
+        Ok(())
+    }
 }
 
 #[derive(Debug, Error)]

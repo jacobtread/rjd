@@ -1,3 +1,5 @@
+use std::fmt::{Display, Write};
+
 use super::reader::{ByteReadable, ByteReader, ReadError};
 use bitflags::bitflags;
 
@@ -28,6 +30,30 @@ bitflags! {
 
 }
 
+impl Display for ClassAccessFlags {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.contains(ClassAccessFlags::PUBLIC) {
+            f.write_str("public ")?;
+        }
+
+        if self.contains(ClassAccessFlags::FINAL) {
+            f.write_str("final ")?;
+        } else if self.contains(ClassAccessFlags::ABSTRACT) {
+            f.write_str("abstract ")?;
+        }
+
+        f.write_str(if self.contains(ClassAccessFlags::INTERFACE) {
+            "interface"
+        } else if self.contains(ClassAccessFlags::ANNOTATION) {
+            "@interface"
+        } else if self.contains(ClassAccessFlags::ENUM) {
+            "enum"
+        } else {
+            "class"
+        })
+    }
+}
+
 // FIELD ACCESS FLAGS
 // --------------------------
 // Flag Name	    Value	Interpretation
@@ -52,6 +78,47 @@ bitflags! {
         const TRANSIENT     = 0x0080;
         const SYNTHETIC     = 0x1000;
         const ENUM          = 0x4000;
+    }
+}
+
+impl Display for FieldAccessFlags {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut spaced = true;
+        if self.contains(FieldAccessFlags::PUBLIC) {
+            f.write_str("public ")?;
+        } else if self.contains(FieldAccessFlags::PRIVATE) {
+            f.write_str("private ")?;
+        } else if self.contains(FieldAccessFlags::PROTECTED) {
+            f.write_str("protected ")?;
+        } else {
+            spaced = false;
+        }
+
+        if self.contains(FieldAccessFlags::VOLATILE) {
+            f.write_str("volatile ")?;
+            spaced = true;
+        }
+
+        if self.contains(FieldAccessFlags::TRANSIENT) {
+            f.write_str("transient ")?;
+            spaced = true;
+        }
+
+        if self.contains(FieldAccessFlags::STATIC) {
+            f.write_str("static ")?;
+            spaced = true;
+        }
+
+        if self.contains(FieldAccessFlags::FINAL) {
+            f.write_str("final ")?;
+            spaced = true;
+        }
+
+        if !spaced {
+            f.write_char(' ')?;
+        }
+
+        Ok(())
     }
 }
 

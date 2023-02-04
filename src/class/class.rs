@@ -3,8 +3,8 @@ use thiserror::Error;
 use crate::format::{
     access::{ClassAccessFlags, FieldAccessFlags, MethodAccessFlags},
     class::{
-        ConstantPool, ConstantPoolResolve, RawAttribute, RawClassFile, RawConstantItem,
-        SourceVersion,
+        ConstantPool, ConstantPoolIndex, ConstantPoolResolve, RawAttribute, RawClassFile,
+        RawConstantItem, SourceVersion,
     },
 };
 
@@ -196,4 +196,49 @@ pub struct Method<'a> {
     pub name: &'a str,
     pub descriptor: MethodDescriptor,
     pub attributes: Vec<RawAttribute<'a>>,
+}
+
+#[derive(Debug)]
+pub enum Attribute<'a> {
+    ConstantValue(ConstantPoolIndex),
+    Code(Code<'a>),
+    StackMapTable,
+    Exceptions,
+    InnerClasses,
+    EnclosingMethod,
+    Synthetic,
+    Signature,
+    SourceFile,
+    SourceDebugExtension,
+    LineNumberTable,
+    LocalVariableTable,
+    LocalVariableTypeTable,
+    Deprecated,
+    RuntimeVisibleAnnotations,
+    RuntimeInvisibleAnnotations,
+    RuntimeVisibleParameterAnnotations,
+    RuntimeInvisibleParameterAnnotations,
+    RuntimeVisibleTypeAnnotations,
+    RuntimeInvisibleTypeAnnotations,
+    AnnotationDefault,
+    BootstrapMethods,
+    MethodParameters,
+}
+
+#[derive(Debug)]
+
+pub struct Code<'a> {
+    pub max_stack: u16,
+    pub max_locals: u16,
+    pub code: &'a [u8],
+    pub exception_table: Vec<ExceptionTableEntry>,
+    pub attributes: Box<Vec<Attribute<'a>>>,
+}
+
+#[derive(Debug)]
+pub struct ExceptionTableEntry {
+    pub start_pc: u16,
+    pub end_pc: u16,
+    pub handler_pc: u16,
+    pub catch_type: ConstantPoolIndex,
 }

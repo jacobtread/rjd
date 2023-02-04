@@ -27,7 +27,7 @@ mod test {
 #[derive(Debug)]
 pub struct RawClassFile<'a> {
     pub version: SourceVersion,
-    pub constant_pool: RawConstantPool<'a>,
+    pub constant_pool: ConstantPool<'a>,
     pub access_flags: ClassAccessFlags,
     pub this_class: ConstantPoolIndex,
     pub super_class: ConstantPoolIndex,
@@ -69,7 +69,7 @@ impl<'a> ByteReadable<'a> for RawClassFile<'a> {
         }
 
         let version = SourceVersion::read(r)?;
-        let constant_pool = RawConstantPool::read(r)?;
+        let constant_pool = ConstantPool::read(r)?;
         let access_flags = ClassAccessFlags::read(r)?;
         let this_class = ConstantPoolIndex::read(r)?;
         let super_class = ConstantPoolIndex::read(r)?;
@@ -93,14 +93,35 @@ impl<'a> ByteReadable<'a> for RawClassFile<'a> {
 }
 
 #[derive(Debug)]
-pub struct RawConstantPool<'a>(pub Vec<RawConstantItem<'a>>);
+pub struct ConstantPool<'a> {
+    pub values: Vec<RawConstantItem<'a>>,
+}
 
-impl<'a> ByteReadable<'a> for RawConstantPool<'a> {
+pub trait ConstantPoolResolve<'a>: Sized {
+    type Error;
+
+    fn resolve<'b>(
+        value: &'b RawConstantItem<'a>,
+        pool: &'b ConstantPool<'a>,
+    ) -> Result<Self, Self::Error>;
+}
+
+impl<'a> ConstantPool<'a> {
+    pub fn resolve<'b, R, E>(&'b self, index: &ConstantPoolIndex) -> Option<Result<R, E>>
+    where
+        R: ConstantPoolResolve<'a, Error = E>,
+    {
+        let value = self.values.get((*index - 1) as usize)?;
+        Some(R::resolve(value, self))
+    }
+}
+
+impl<'a> ByteReadable<'a> for ConstantPool<'a> {
     type Error = ConstantParseError;
 
     fn read(r: &mut ByteReader<'a>) -> Result<Self, Self::Error> {
         let values = r.u2_list(true)?;
-        Ok(Self(values))
+        Ok(Self { values })
     }
 }
 
@@ -203,15 +224,14 @@ impl ByteReadable<'_> for MajorVersion {
 /// Represents an index within a constant pool
 /// that can be resolved to a value
 
-#[derive(Debug)]
-pub struct ConstantPoolIndex(pub u16);
+pub type ConstantPoolIndex = u16;
 
 impl ByteReadable<'_> for ConstantPoolIndex {
     type Error = ReadError;
 
+    #[inline]
     fn read<'a>(r: &mut ByteReader<'a>) -> Result<Self, Self::Error> {
-        let index = r.u2()?;
-        Ok(Self(index))
+        r.u2()
     }
 }
 
@@ -275,7 +295,7 @@ pub enum RawConstantItem<'a> {
     NameAndType(RawNameAndType),
     Utf8(&'a str),
     MethodHandle {
-        reference_kind: u8,
+        reference_kind: ReferenceKind,
         reference_index: ConstantPoolIndex,
     },
     MethodType {
@@ -285,6 +305,47 @@ pub enum RawConstantItem<'a> {
         bootstrap_method_attr_index: u16,
         name_and_type_index: ConstantPoolIndex,
     },
+}
+
+#[derive(Debug)]
+pub enum ReferenceKind {
+    GetField,
+    GetStatic,
+    PutField,
+    PutStatic,
+    InvokeVirtual,
+    InvokeStatic,
+    InvokeSpecial,
+    NewInvokeSpecial,
+    InvokeInterface,
+}
+
+impl TryFrom<u8> for ReferenceKind {
+    type Error = ConstantParseError;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        Ok(match value {
+            1 => Self::GetField,
+            2 => Self::GetStatic,
+            3 => Self::PutField,
+            4 => Self::PutStatic,
+            5 => Self::InvokeVirtual,
+            6 => Self::InvokeStatic,
+            7 => Self::InvokeSpecial,
+            8 => Self::NewInvokeSpecial,
+            9 => Self::InvokeInterface,
+            _ => return Err(ConstantParseError::UnknownReferenceKind),
+        })
+    }
+}
+
+impl ByteReadable<'_> for ReferenceKind {
+    type Error = ConstantParseError;
+
+    fn read(r: &mut ByteReader<'_>) -> Result<Self, Self::Error> {
+        let kind = r.u1()?;
+        Self::try_from(kind)
+    }
 }
 
 #[derive(Debug, Error)]
@@ -297,6 +358,9 @@ pub enum ConstantParseError {
 
     #[error("Invalid utf8: {0}")]
     InvalidUtf8(#[from] Utf8Error),
+
+    #[error("Unknown reference kind")]
+    UnknownReferenceKind,
 }
 
 impl<'a> ByteReadable<'a> for RawConstantItem<'a> {
@@ -373,7 +437,7 @@ impl<'a> ByteReadable<'a> for RawConstantItem<'a> {
 
             // CONSTANT_MethodHandle
             15 => {
-                let reference_kind = r.u1()?;
+                let reference_kind = ReferenceKind::read(r)?;
                 let reference_index = ConstantPoolIndex::read(r)?;
                 Self::MethodHandle {
                     reference_kind,

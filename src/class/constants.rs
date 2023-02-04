@@ -1,27 +1,74 @@
 use std::{
-    fmt::{Display, Write},
+    fmt::{Debug, Display, Write},
     str::{Chars, FromStr},
 };
 
 use thiserror::Error;
 
-use crate::format::class::RawConstantPool;
+use crate::format::class::{ConstantPool, ConstantPoolResolve, RawConstantItem};
 
-pub struct ConstantPool<'a> {
-    values: Vec<ConstantPoolItem<'a>>,
+#[derive(Debug, Clone)]
+pub struct ObjectPath<'a> {
+    /// Packages associated with the class
+    pub packages: Vec<&'a str>,
+    /// The class itself
+    pub class: &'a str,
+    /// Outer classes for the class
+    pub outer_classes: Vec<&'a str>,
 }
 
-impl<'a> ConstantPool<'a> {
-    // pub fn from_raw(raw: RawConstantPool<'_>) -> Self {
-    //     let raw_values = raw.0;
-    //     let values = Vec::with_capacity(raw_values.len());
+impl<'a> ConstantPoolResolve<'a> for ObjectPath<'a> {
+    type Error = ObjectPathError;
 
-    //     for value in &Self {}
-    // }
+    fn resolve<'b>(
+        value: &RawConstantItem<'a>,
+        pool: &'b ConstantPool<'a>,
+    ) -> Result<Self, Self::Error> {
+        match value {
+            RawConstantItem::Utf8(value) => Self::from_str(*value),
+            _ => Err(ObjectPathError::NonUtf8Type),
+        }
+    }
 }
 
-pub enum ConstantPoolItem<'a> {
-    Class { name: &'a str },
+#[derive(Debug, Error)]
+pub enum ObjectPathError {
+    #[error("Claass path missing class name")]
+    MissingClassName,
+
+    #[error("Attempt to resolve object path from non utf-8 index")]
+    NonUtf8Type,
+}
+
+impl<'a> ObjectPath<'a> {
+    fn from_str(s: &'a str) -> Result<Self, ObjectPathError> {
+        let mut packages: Vec<&str> = s.split('/').collect();
+        let class = packages.pop().ok_or(ObjectPathError::MissingClassName)?;
+
+        let mut outer_classes: Vec<&str> = class.split('$').collect();
+
+        let class = outer_classes
+            .pop()
+            .ok_or(ObjectPathError::MissingClassName)?;
+
+        Ok(Self {
+            packages,
+            class,
+            outer_classes,
+        })
+    }
+
+    pub fn is_java_lang(&self) -> bool {
+        if self.packages.len() != 2 {
+            return false;
+        }
+
+        self.packages[0] == "java" && self.packages[1] == "lang"
+    }
+
+    pub fn format_package(&self) -> String {
+        self.packages.join(".")
+    }
 }
 
 #[derive(Debug)]
@@ -62,6 +109,9 @@ pub enum FieldTypeError {
 
     #[error("Unknown descriptor type")]
     Unknown,
+
+    #[error("Attempt to resolve object path from non utf-8 index")]
+    NonUtf8Type,
 }
 
 type FieldTypeResult = Result<FieldType, FieldTypeError>;
@@ -70,8 +120,46 @@ impl FromStr for FieldType {
     type Err = FieldTypeError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
+        println!("{}", s);
         let mut chars = s.chars();
         Self::from_chars(&mut chars)
+    }
+}
+
+#[derive(Debug, Error)]
+pub struct NonUtf8Error;
+
+impl Display for NonUtf8Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Expected utf8 value at constant pool index")
+    }
+}
+
+impl<'a> ConstantPoolResolve<'a> for &'a str {
+    type Error = NonUtf8Error;
+
+    fn resolve<'b>(
+        value: &RawConstantItem<'a>,
+        pool: &'b ConstantPool<'a>,
+    ) -> Result<Self, Self::Error> {
+        match value {
+            RawConstantItem::Utf8(value) => Ok(*value),
+            _ => Err(NonUtf8Error),
+        }
+    }
+}
+
+impl<'a> ConstantPoolResolve<'a> for FieldType {
+    type Error = FieldTypeError;
+
+    fn resolve<'b>(
+        value: &RawConstantItem<'a>,
+        pool: &'b ConstantPool<'a>,
+    ) -> Result<Self, Self::Error> {
+        match value {
+            RawConstantItem::Utf8(value) => Self::from_str(*value),
+            _ => Err(FieldTypeError::NonUtf8Type),
+        }
     }
 }
 
@@ -93,7 +181,10 @@ impl FieldType {
             'J' => FieldType::Long,
             'S' => FieldType::Short,
             'Z' => FieldType::Boolean,
-            _ => return Err(FieldTypeError::Unknown),
+            value => {
+                println!("{}", value);
+                return Err(FieldTypeError::Unknown);
+            }
         })
     }
 
@@ -170,6 +261,9 @@ pub enum MetDescError {
 
     #[error("{0}")]
     FieldType(#[from] FieldTypeError),
+
+    #[error("Attempt to resolve object path from non utf-8 index")]
+    NonUtf8Type,
 }
 
 #[derive(Debug)]
@@ -185,6 +279,20 @@ impl FromStr for MethodDescriptor {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let mut chars = s.chars();
         Self::from_chars(&mut chars)
+    }
+}
+
+impl<'a> ConstantPoolResolve<'a> for MethodDescriptor {
+    type Error = MetDescError;
+
+    fn resolve<'b>(
+        value: &RawConstantItem<'a>,
+        pool: &'b ConstantPool<'a>,
+    ) -> Result<Self, Self::Error> {
+        match value {
+            RawConstantItem::Utf8(value) => Self::from_str(*value),
+            _ => Err(MetDescError::NonUtf8Type),
+        }
     }
 }
 

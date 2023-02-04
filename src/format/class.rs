@@ -93,7 +93,7 @@ impl<'a> ByteReadable<'a> for RawClassFile<'a> {
 }
 
 #[derive(Debug)]
-pub struct RawConstantPool<'a>(Vec<RawConstantItem<'a>>);
+pub struct RawConstantPool<'a>(pub Vec<RawConstantItem<'a>>);
 
 impl<'a> ByteReadable<'a> for RawConstantPool<'a> {
     type Error = ConstantParseError;

@@ -155,6 +155,7 @@ pub type ConstantPoolIndex = u16;
 pub type ClassIndex = u16;
 pub type Utf8Index = u16;
 pub type NameAndTypeIndex = u16;
+pub type DescriptorIndex = u16;
 pub type FieldDescriptorIndex = u16;
 pub type MethodDescriptorIndex = u16;
 

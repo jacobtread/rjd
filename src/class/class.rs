@@ -4,7 +4,10 @@ use super::constants::{
 };
 use crate::format::{
     access::{ClassAccessFlags, FieldAccessFlags, MethodAccessFlags},
-    class::{ConstantPool, ConstantPoolIndex, RawAttribute, RawClassFile, SourceVersion},
+    class::{
+        ConstantPool, ConstantPoolIndex, DescriptorIndex, RawAttribute, RawClassFile,
+        SourceVersion, Utf8Index,
+    },
 };
 use thiserror::Error;
 
@@ -141,102 +144,144 @@ pub struct Method<'a> {
     pub attributes: Vec<RawAttribute<'a>>,
 }
 
-#[derive(Debug)]
-pub enum Attribute<'a> {
-    ConstantValue(ConstantPoolIndex),
-    Code(Code<'a>),
-    StackMapTable {
-        bytes: &'a [u8],
-    },
-    Exceptions {
-        values: Vec<Class<'a>>,
-    },
-    InnerClasses {
-        inner_class_info: Class<'a>,
-        outer_class_info: Option<Class<'a>>,
-        inner_name: &'a str,
-        inner_class_access_flags: ClassAccessFlags,
-    },
-    EnclosingMethod {
-        class: Class<'a>,
-        method_index: ConstantPoolIndex,
-    },
-    Synthetic,
-    Signature(&'a str),
-    SourceFile(&'a str),
-    SourceDebugExtension(&'a [u8]),
-    LineNumberTable {
-        values: Vec<LineNumberTableEntry>,
-    },
-    LocalVariableTable {
-        values: Vec<LocalVariableTableEntry>,
-    },
-    LocalVariableTypeTable {
-        values: Vec<LocalVariableTypeTableEntry>,
-    },
-    Deprecated,
-    RuntimeVisibleAnnotations,
-    RuntimeInvisibleAnnotations,
-    RuntimeVisibleParameterAnnotations,
-    RuntimeInvisibleParameterAnnotations,
-    RuntimeVisibleTypeAnnotations,
-    RuntimeInvisibleTypeAnnotations,
-    AnnotationDefault,
-    BootstrapMethods,
-    MethodParameters,
+mod attribute {
+    use crate::format::{
+        access::NestedClassAccessFlags,
+        class::{ClassIndex, ConstantPoolIndex, DescriptorIndex, NameAndTypeIndex, Utf8Index},
+    };
 
-    Other(&'a str, &'a [u8]),
-}
+    #[derive(Debug)]
+    pub enum Attribute<'a> {
+        ConstantValue(ConstantValue),
+        Code(Code<'a>),
+        StackMapTable(StackMapTable<'a>),
+        Exceptions(Exceptions),
+        InnerClasses(InnerClasses),
+        EnclosingMethod(EnclosingMethod),
+        Synthetic,
+        Signature(Signature),
+        SourceFile(SourceFile),
+        SourceDebugExtension(SourceDebugExtension<'a>),
+        LineNumberTable(LineNumberTable),
+        LocalVariableTable(LocalVariableTable),
+        LocalVariableTypeTable(LocalVariableTypeTable),
+        Deprecated,
+        RuntimeVisibleAnnotations,
+        RuntimeInvisibleAnnotations,
+        RuntimeVisibleParameterAnnotations,
+        RuntimeInvisibleParameterAnnotations,
+        RuntimeVisibleTypeAnnotations,
+        RuntimeInvisibleTypeAnnotations,
+        AnnotationDefault,
+        BootstrapMethods,
+        MethodParameters,
+        Other(&'a str, &'a [u8]),
+    }
 
-/// Index that can be resolved in a constant pool to gain a Utf8 value
-#[derive(Debug)]
-pub struct Utf8Index(ConstantPoolIndex);
+    #[derive(Debug)]
+    pub struct ConstantValue {
+        pub index: ConstantPoolIndex,
+    }
 
-/// Index that can be resolved in a constant pool to gain a Utf8 value
-/// that can then be decoded into a descriptor
-#[derive(Debug)]
-pub struct DescriptorIndex(ConstantPoolIndex);
+    #[derive(Debug)]
 
-#[derive(Debug)]
+    pub struct Code<'a> {
+        pub max_stack: u16,
+        pub max_locals: u16,
+        pub code: &'a [u8],
+        pub exception_table: Vec<ExceptionTableEntry>,
+        pub attributes: Box<Vec<Attribute<'a>>>,
+    }
 
-pub struct Code<'a> {
-    pub max_stack: u16,
-    pub max_locals: u16,
-    pub code: &'a [u8],
-    pub exception_table: Vec<ExceptionTableEntry>,
-    pub attributes: Box<Vec<Attribute<'a>>>,
-}
+    #[derive(Debug)]
+    pub struct ExceptionTableEntry {
+        pub start_pc: u16,
+        pub end_pc: u16,
+        pub handler_pc: u16,
+        pub catch_type: ConstantPoolIndex,
+    }
 
-#[derive(Debug)]
-pub struct ExceptionTableEntry {
-    pub start_pc: u16,
-    pub end_pc: u16,
-    pub handler_pc: u16,
-    pub catch_type: ConstantPoolIndex,
-}
+    /// TODO: Implement this structure and its parsing
+    #[derive(Debug)]
+    pub struct StackMapTable<'a>(&'a [u8]);
 
-#[derive(Debug)]
-pub struct LineNumberTableEntry {
-    start_pc: u16,
-    line_number: u16,
-}
+    #[derive(Debug)]
+    pub struct Exceptions {
+        exceptions: Vec<ClassIndex>,
+    }
 
-#[derive(Debug)]
-pub struct LocalVariableTableEntry {
-    start_pc: u16,
-    length: u16,
-    name_index: Utf8Index,
-    descriptor_index: DescriptorIndex,
-    index: u16,
-}
+    #[derive(Debug)]
+    pub struct InnerClasses {
+        classes: Vec<InnerClass>,
+    }
 
-#[derive(Debug)]
-pub struct LocalVariableTypeTableEntry {
-    start_pc: u16,
-    length: u16,
-    name_index: Utf8Index,
-    signature_index: Utf8Index,
-    index: u16,
+    #[derive(Debug)]
+    pub struct InnerClass {
+        inner_class: ClassIndex,
+        outer_class: Option<ClassIndex>,
+        inner_name: Option<Utf8Index>,
+        inner_class_access_flags: NestedClassAccessFlags,
+    }
+
+    #[derive(Debug)]
+    pub struct EnclosingMethod {
+        class: ClassIndex,
+        method: Option<NameAndTypeIndex>,
+    }
+
+    #[derive(Debug)]
+    pub struct Signature {
+        signature: Utf8Index,
+    }
+
+    #[derive(Debug)]
+    pub struct SourceFile {
+        source_file: Utf8Index,
+    }
+
+    #[derive(Debug)]
+    pub struct SourceDebugExtension<'a> {
+        debug_extension: &'a [u8],
+    }
+
+    #[derive(Debug)]
+    pub struct LineNumberTable {
+        entires: Vec<LineNumberTableEntry>,
+    }
+
+    #[derive(Debug)]
+    pub struct LineNumberTableEntry {
+        start_pc: u16,
+        line_number: u16,
+    }
+
+    #[derive(Debug)]
+    pub struct LocalVariableTable {
+        entires: Vec<LocalVariableTableEntry>,
+    }
+
+    #[derive(Debug)]
+    pub struct LocalVariableTableEntry {
+        start_pc: u16,
+        length: u16,
+        name_index: Utf8Index,
+        descriptor_index: DescriptorIndex,
+        index: u16,
+    }
+
+    #[derive(Debug)]
+    pub struct LocalVariableTypeTable {
+        entires: Vec<LocalVariableTypeTableEntry>,
+    }
+
+    #[derive(Debug)]
+    pub struct LocalVariableTypeTableEntry {
+        start_pc: u16,
+        length: u16,
+        name_index: Utf8Index,
+        signature_index: Utf8Index,
+        index: u16,
+    }
 }
 
 pub struct Annotation {

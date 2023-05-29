@@ -1,16 +1,12 @@
-use std::fmt::{Display, Write};
-
-use thiserror::Error;
-
-use crate::format::{
-    access::{ClassAccessFlags, FieldAccessFlags, MethodAccessFlags},
-    class::{ConstantPool, ConstantPoolIndex, RawAttribute, RawClassFile, SourceVersion},
-};
-
 use super::constants::{
     Class, ClassResolveError, FieldType, FieldTypeError, MetDescError, MethodDescriptor,
     NonUtf8Error,
 };
+use crate::format::{
+    access::{ClassAccessFlags, FieldAccessFlags, MethodAccessFlags},
+    class::{ConstantPool, ConstantPoolIndex, RawAttribute, RawClassFile, SourceVersion},
+};
+use thiserror::Error;
 
 #[derive(Debug)]
 pub struct ClassFile<'a> {
@@ -27,39 +23,6 @@ pub struct ClassFile<'a> {
     pub methods: Vec<Method<'a>>,
 
     pub attributes: Vec<RawAttribute<'a>>,
-}
-
-impl Display for ClassFile<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let this_class = &self.this_class;
-        let package = &this_class.packages;
-
-        if !package.is_empty() {
-            writeln!(f, "package {};", package.join("."))?;
-        }
-
-        f.write_char('\n')?;
-
-        self.access_flags.fmt(f)?;
-
-        f.write_char(' ')?;
-        f.write_str(this_class.class)?;
-        f.write_str(" {\n\n")?;
-
-        for field in &self.fields {
-            f.write_str("  ")?;
-            field.access_flags.fmt(f)?;
-            field.descriptor.fmt(f)?;
-            f.write_char(' ')?;
-            f.write_str(field.name)?;
-            f.write_str(";\n")?;
-        }
-        f.write_char('\n')?;
-
-        f.write_str("}")?;
-
-        Ok(())
-    }
 }
 
 #[derive(Debug, Error)]
@@ -278,21 +241,4 @@ pub struct LocalVariableTypeTableEntry {
 
 pub struct Annotation {
     type_index: Utf8Index,
-}
-
-#[cfg(test)]
-mod test {
-    use std::fs::read;
-
-    use crate::class::class::ClassFile;
-
-    use super::RawClassFile;
-
-    #[test]
-    fn test_parse_class() {
-        let file = read("Test.class").unwrap();
-        let class_file = RawClassFile::try_read(&file).unwrap();
-        let class_file = ClassFile::try_from(class_file).unwrap();
-        println!("{}", class_file)
-    }
 }

@@ -32,8 +32,11 @@ pub struct RawClassFile<'a> {
     pub interfaces: Vec<ConstantPoolIndex>,
     pub fields: Vec<RawField<'a>>,
     pub methods: Vec<RawMethod<'a>>,
-    pub attributes: Vec<RawAttribute<'a>>,
+    pub attributes: RawAttributes<'a>,
 }
+
+#[derive(Debug)]
+pub struct RawAttributes<'a>(pub Vec<RawAttribute<'a>>);
 
 impl<'a> RawClassFile<'a> {
     pub const MAGIC: u32 = 0xCAFEBABE;
@@ -61,6 +64,7 @@ impl<'a> ByteReadable<'a> for RawClassFile<'a> {
         let fields = r.u2_list(false)?;
         let methods = r.u2_list(false)?;
         let attributes = r.u2_list(false)?;
+        let attributes = RawAttributes(attributes);
 
         Ok(Self {
             version,
@@ -90,6 +94,13 @@ pub trait ConstantPoolResolve<'a>: Sized {
 impl<'a> ConstantPool<'a> {
     pub fn get(&self, index: ConstantPoolIndex) -> Option<&ConstantItem<'a>> {
         self.values.get((index - 1) as usize)
+    }
+
+    pub fn get_utf8(&self, index: ConstantPoolIndex) -> Option<&'a str> {
+        match self.get(index) {
+            Some(ConstantItem::Utf8(name)) => Some(*name),
+            _ => None,
+        }
     }
 
     pub fn resolve<'b, R, E>(&'b self, index: ConstantPoolIndex) -> Option<Result<R, E>>
@@ -258,7 +269,7 @@ pub struct RawField<'a> {
     pub access_flags: FieldAccessFlags,
     pub name: Utf8Index,
     pub descriptor: FieldDescriptorIndex,
-    pub attributes: Vec<RawAttribute<'a>>,
+    pub attributes: RawAttributes<'a>,
 }
 
 #[derive(Debug)]
@@ -272,7 +283,7 @@ pub struct RawMethod<'a> {
     pub access_flags: MethodAccessFlags,
     pub name: Utf8Index,
     pub descriptor: MethodDescriptorIndex,
-    pub attributes: Vec<RawAttribute<'a>>,
+    pub attributes: RawAttributes<'a>,
 }
 
 impl<'a> ByteReadable<'a> for ConstantItem<'a> {
@@ -372,7 +383,7 @@ impl<'a> ByteReadable<'a> for RawField<'a> {
         let access_flags = FieldAccessFlags::read(r)?;
         let name = Utf8Index::read(r)?;
         let descriptor = Utf8Index::read(r)?;
-        let attributes = r.u2_list(false)?;
+        let attributes = RawAttributes(r.u2_list(false)?);
         Ok(Self {
             access_flags,
             name,
@@ -399,7 +410,7 @@ impl<'a> ByteReadable<'a> for RawMethod<'a> {
         let access_flags = MethodAccessFlags::read(r)?;
         let name = Utf8Index::read(r)?;
         let descriptor = Utf8Index::read(r)?;
-        let attributes = r.u2_list(false)?;
+        let attributes = RawAttributes(r.u2_list(false)?);
         Ok(Self {
             access_flags,
             name,

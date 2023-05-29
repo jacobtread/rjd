@@ -51,7 +51,7 @@ mod test {
 
     #[test]
     fn test_render_class() {
-        let file = read("tests/ExampleStringLoop.class").unwrap();
+        let file = read("tests/ExampleInterfaceOverride.class").unwrap();
         let class_file = RawClassFile::try_read(&file).unwrap();
         let class_file = ClassFile::try_from(class_file).unwrap();
         dbg!(&class_file.fields);

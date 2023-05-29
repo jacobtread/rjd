@@ -6,10 +6,7 @@ use super::constants::{
 };
 use crate::format::{
     access::{ClassAccessFlags, FieldAccessFlags, MethodAccessFlags},
-    class::{
-        ConstantPool, ConstantPoolIndex, DescriptorIndex, RawAttribute, RawAttributes,
-        RawClassFile, SourceVersion, Utf8Index,
-    },
+    class::{ConstantPool, RawAttributes, RawClassFile, SourceVersion},
 };
 use thiserror::Error;
 
@@ -182,7 +179,7 @@ mod attribute {
         Code(Code<'a>),
         StackMapTable(ParserTodo<'a>),
         Exceptions(Exceptions<'a>),
-        InnerClasses(InnerClasses),
+        InnerClasses(InnerClasses<'a>),
         EnclosingMethod(EnclosingMethod),
         Synthetic,
         Signature(Signature),
@@ -236,6 +233,10 @@ mod attribute {
                 "SourceFile" => Attribute::SourceFile(SourceFile::read(r, pool)?),
                 "Exceptions" => Attribute::Exceptions(Exceptions::read(r, pool)?),
                 "LineNumberTable" => Attribute::LineNumberTable(LineNumberTable::read(r, pool)?),
+                "InnerClasses" => Attribute::InnerClasses(InnerClasses::read(r, pool)?),
+                "LocalVariableTable" => {
+                    Attribute::LocalVariableTable(LocalVariableTable::read(r, pool)?)
+                }
 
                 // TODO: Properly decode
                 _ => Attribute::Other(name, attr.info),
@@ -249,7 +250,7 @@ mod attribute {
     }
 
     impl<'a> AttributeParsable<'a> for ConstantValue {
-        fn read(r: &mut ByteReader<'a>, pool: &ConstantPool<'a>) -> Result<Self, AttributeError> {
+        fn read(r: &mut ByteReader<'a>, _pool: &ConstantPool<'a>) -> Result<Self, AttributeError> {
             let index = r.u2()?;
 
             Ok(Self { index })
@@ -263,7 +264,7 @@ mod attribute {
         pub max_locals: u16,
         pub code: &'a [u8],
         pub exception_table: Vec<ExceptionTableEntry>,
-        pub attributes: Box<Vec<Attribute<'a>>>,
+        pub attributes: Vec<Attribute<'a>>,
     }
 
     impl<'a> AttributeParsable<'a> for Code<'a> {
@@ -280,7 +281,7 @@ mod attribute {
                 max_locals,
                 code,
                 exception_table,
-                attributes: Box::new(attributes),
+                attributes,
             })
         }
     }
@@ -314,7 +315,7 @@ mod attribute {
 
     #[derive(Debug)]
     pub struct Exceptions<'a> {
-        exceptions: Vec<Class<'a>>,
+        pub exceptions: Vec<Class<'a>>,
     }
 
     impl<'a> AttributeParsable<'a> for Exceptions<'a> {
@@ -333,32 +334,94 @@ mod attribute {
     }
 
     #[derive(Debug)]
-    pub struct InnerClasses {
-        classes: Vec<InnerClass>,
+    pub struct InnerClasses<'a> {
+        pub classes: Vec<InnerClass<'a>>,
+    }
+
+    impl<'a> AttributeParsable<'a> for InnerClasses<'a> {
+        fn read(r: &mut ByteReader<'a>, pool: &ConstantPool<'a>) -> Result<Self, AttributeError> {
+            let classes: Vec<RawInnerClass> = r.u2_list(false)?;
+            let classes = classes
+                .into_iter()
+                .filter_map(|value| value.parse(pool).ok())
+                .collect();
+            Ok(Self { classes })
+        }
     }
 
     #[derive(Debug)]
-    pub struct InnerClass {
-        inner_class: ClassIndex,
-        outer_class: Option<ClassIndex>,
-        inner_name: Option<Utf8Index>,
-        inner_class_access_flags: NestedClassAccessFlags,
+    pub struct InnerClass<'a> {
+        pub inner_class: Class<'a>,
+        pub outer_class: Option<Class<'a>>,
+        pub inner_name: Option<&'a str>,
+        pub inner_class_access_flags: NestedClassAccessFlags,
+    }
+
+    #[derive(Debug)]
+    pub struct RawInnerClass {
+        pub inner_class: ClassIndex,
+        pub outer_class: ClassIndex,
+        pub inner_name: Utf8Index,
+        pub inner_class_access_flags: NestedClassAccessFlags,
+    }
+
+    impl RawInnerClass {
+        pub fn parse<'a>(self, pool: &ConstantPool<'a>) -> Result<InnerClass<'a>, AttributeError> {
+            let inner_class = pool.get(self.inner_class).unwrap();
+            let inner_class = Class::resolve(inner_class, pool).unwrap();
+            let outer_class = if self.outer_class == 0 {
+                None
+            } else {
+                let outer_class = pool.get(self.outer_class).unwrap();
+                let outer_class = Class::resolve(outer_class, pool).unwrap();
+                Some(outer_class)
+            };
+            let inner_name = if self.inner_name == 0 {
+                None
+            } else {
+                pool.get_utf8(self.inner_name)
+            };
+            Ok(InnerClass {
+                inner_class,
+                outer_class,
+                inner_name,
+                inner_class_access_flags: self.inner_class_access_flags,
+            })
+        }
+    }
+
+    impl ByteReadable<'_> for RawInnerClass {
+        fn read(r: &mut ByteReader<'_>) -> crate::format::reader::ReadResult<Self> {
+            let inner_class = r.u2()?;
+            let outer_class = r.u2()?;
+            let inner_name = r.u2()?;
+            let inner_class_access_flags = r.u2()?;
+            let inner_class_access_flags =
+                NestedClassAccessFlags::from_bits_retain(inner_class_access_flags);
+
+            Ok(Self {
+                inner_class,
+                outer_class,
+                inner_name,
+                inner_class_access_flags,
+            })
+        }
     }
 
     #[derive(Debug)]
     pub struct EnclosingMethod {
-        class: ClassIndex,
-        method: Option<NameAndTypeIndex>,
+        pub class: ClassIndex,
+        pub method: Option<NameAndTypeIndex>,
     }
 
     #[derive(Debug)]
     pub struct Signature {
-        signature: Utf8Index,
+        pub signature: Utf8Index,
     }
 
     #[derive(Debug)]
     pub struct SourceFile<'a> {
-        source_file: &'a str,
+        pub source_file: &'a str,
     }
 
     impl<'a> AttributeParsable<'a> for SourceFile<'a> {
@@ -371,25 +434,25 @@ mod attribute {
 
     #[derive(Debug)]
     pub struct SourceDebugExtension<'a> {
-        debug_extension: &'a [u8],
+        pub debug_extension: &'a [u8],
     }
 
     #[derive(Debug)]
     pub struct LineNumberTable {
-        entires: Vec<LineNumberTableEntry>,
+        pub entires: Vec<LineNumberTableEntry>,
     }
 
     impl<'a> AttributeParsable<'a> for LineNumberTable {
         fn read(r: &mut ByteReader<'a>, _pool: &ConstantPool<'a>) -> Result<Self, AttributeError> {
             let entires = r.u2_list(false)?;
-            Ok(LineNumberTable { entires })
+            Ok(Self { entires })
         }
     }
 
     #[derive(Debug)]
     pub struct LineNumberTableEntry {
-        start_pc: u16,
-        line_number: u16,
+        pub start_pc: u16,
+        pub line_number: u16,
     }
 
     impl ByteReadable<'_> for LineNumberTableEntry {
@@ -406,30 +469,55 @@ mod attribute {
 
     #[derive(Debug)]
     pub struct LocalVariableTable {
-        entires: Vec<LocalVariableTableEntry>,
+        pub entires: Vec<LocalVariableTableEntry>,
+    }
+
+    impl<'a> AttributeParsable<'a> for LocalVariableTable {
+        fn read(r: &mut ByteReader<'a>, _pool: &ConstantPool<'a>) -> Result<Self, AttributeError> {
+            let entires = r.u2_list(false)?;
+            Ok(Self { entires })
+        }
     }
 
     #[derive(Debug)]
     pub struct LocalVariableTableEntry {
-        start_pc: u16,
-        length: u16,
-        name_index: Utf8Index,
-        descriptor_index: DescriptorIndex,
-        index: u16,
+        pub start_pc: u16,
+        pub length: u16,
+        pub name_index: Utf8Index,
+        pub descriptor_index: DescriptorIndex,
+        pub index: u16,
+    }
+
+    impl ByteReadable<'_> for LocalVariableTableEntry {
+        fn read(r: &mut ByteReader<'_>) -> crate::format::reader::ReadResult<Self> {
+            let start_pc = r.u2()?;
+            let length = r.u2()?;
+            let name_index = r.u2()?;
+            let descriptor_index = r.u2()?;
+            let index = r.u2()?;
+
+            Ok(Self {
+                start_pc,
+                length,
+                name_index,
+                descriptor_index,
+                index,
+            })
+        }
     }
 
     #[derive(Debug)]
     pub struct LocalVariableTypeTable {
-        entires: Vec<LocalVariableTypeTableEntry>,
+        pub entires: Vec<LocalVariableTypeTableEntry>,
     }
 
     #[derive(Debug)]
     pub struct LocalVariableTypeTableEntry {
-        start_pc: u16,
-        length: u16,
-        name_index: Utf8Index,
-        signature_index: Utf8Index,
-        index: u16,
+        pub start_pc: u16,
+        pub length: u16,
+        pub name_index: Utf8Index,
+        pub signature_index: Utf8Index,
+        pub index: u16,
     }
 
     #[derive(Debug)]
@@ -440,8 +528,8 @@ mod attribute {
 
     #[derive(Debug)]
     pub struct AnnotationPair {
-        name: Utf8Index,
-        value: ElementValue,
+        pub name: Utf8Index,
+        pub value: ElementValue,
     }
 
     #[derive(Debug)]
@@ -458,32 +546,32 @@ mod attribute {
         Enum(EnumElement),
         Class(Utf8Index),
         Annotation(Box<Annotation>),
-        Array(Vec<Box<ElementValue>>),
+        Array(Vec<ElementValue>),
     }
 
     #[derive(Debug)]
     pub struct EnumElement {
-        type_name: Utf8Index,
-        name_index: Utf8Index,
+        pub type_name: Utf8Index,
+        pub name_index: Utf8Index,
     }
 
     #[derive(Debug)]
     pub struct RuntimeVisibleAnnotations {
-        annotations: Vec<Annotation>,
+        pub annotations: Vec<Annotation>,
     }
 
     #[derive(Debug)]
     pub struct RuntimeInvisibleAnnotations {
-        annotations: Vec<Annotation>,
+        pub annotations: Vec<Annotation>,
     }
 
     #[derive(Debug)]
     pub struct RuntimeVisibleParameterAnnotations {
-        annotations: Vec<Vec<Annotation>>,
+        pub annotations: Vec<Vec<Annotation>>,
     }
 
     #[derive(Debug)]
     pub struct RuntimeInvisibleParameterAnnotations {
-        annotations: Vec<Vec<Annotation>>,
+        pub annotations: Vec<Vec<Annotation>>,
     }
 }

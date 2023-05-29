@@ -1,14 +1,14 @@
 use std::{
-    fmt::{Debug, Display, Write},
+    fmt::{Debug, Display},
     str::{Chars, FromStr},
 };
 
 use thiserror::Error;
 
-use crate::format::class::{ConstantPool, ConstantPoolResolve, RawConstantItem};
+use crate::format::class::{ConstantItem, ConstantPool, ConstantPoolResolve, RawClass};
 
 #[derive(Debug, Clone)]
-pub struct ObjectPath<'a> {
+pub struct Class<'a> {
     /// Packages associated with the class
     pub packages: Vec<&'a str>,
     /// The class itself
@@ -17,39 +17,51 @@ pub struct ObjectPath<'a> {
     pub outer_classes: Vec<&'a str>,
 }
 
-impl<'a> ConstantPoolResolve<'a> for ObjectPath<'a> {
-    type Error = ObjectPathError;
+impl<'a> ConstantPoolResolve<'a> for Class<'a> {
+    type Error = ClassResolveError;
 
-    fn resolve<'b>(
-        value: &RawConstantItem<'a>,
-        pool: &'b ConstantPool<'a>,
-    ) -> Result<Self, Self::Error> {
-        match value {
-            RawConstantItem::Utf8(value) => Self::from_str(*value),
-            _ => Err(ObjectPathError::NonUtf8Type),
-        }
+    fn resolve<'b>(value: &ConstantItem<'a>, pool: &ConstantPool<'a>) -> Result<Self, Self::Error> {
+        let index = match value {
+            ConstantItem::Class(RawClass { name: name_index }) => *name_index,
+            _ => return Err(ClassResolveError::NonClassType),
+        };
+
+        // Find the associated UTF-8
+        let utf8 = match pool.get(index) {
+            Some(ConstantItem::Utf8(value)) => *value,
+            Some(_) => return Err(ClassResolveError::NonUtf8Type),
+            None => return Err(ClassResolveError::MissingClassUtf8),
+        };
+
+        Self::from_str(utf8)
     }
 }
 
 #[derive(Debug, Error)]
-pub enum ObjectPathError {
+pub enum ClassResolveError {
     #[error("Claass path missing class name")]
     MissingClassName,
 
     #[error("Attempt to resolve object path from non utf-8 index")]
     NonUtf8Type,
+
+    #[error("Missing backing ut8 constant for class")]
+    MissingClassUtf8,
+
+    #[error("Constant at desired index was not a Class type")]
+    NonClassType,
 }
 
-impl<'a> ObjectPath<'a> {
-    fn from_str(s: &'a str) -> Result<Self, ObjectPathError> {
+impl<'a> Class<'a> {
+    fn from_str(s: &'a str) -> Result<Self, ClassResolveError> {
         let mut packages: Vec<&str> = s.split('/').collect();
-        let class = packages.pop().ok_or(ObjectPathError::MissingClassName)?;
+        let class = packages.pop().ok_or(ClassResolveError::MissingClassName)?;
 
         let mut outer_classes: Vec<&str> = class.split('$').collect();
 
         let class = outer_classes
             .pop()
-            .ok_or(ObjectPathError::MissingClassName)?;
+            .ok_or(ClassResolveError::MissingClassName)?;
 
         Ok(Self {
             packages,
@@ -71,7 +83,7 @@ impl<'a> ObjectPath<'a> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum FieldType {
     Byte,
     Char,
@@ -138,11 +150,11 @@ impl<'a> ConstantPoolResolve<'a> for &'a str {
     type Error = NonUtf8Error;
 
     fn resolve<'b>(
-        value: &RawConstantItem<'a>,
-        pool: &'b ConstantPool<'a>,
+        value: &ConstantItem<'a>,
+        _pool: &'b ConstantPool<'a>,
     ) -> Result<Self, Self::Error> {
         match value {
-            RawConstantItem::Utf8(value) => Ok(*value),
+            ConstantItem::Utf8(value) => Ok(*value),
             _ => Err(NonUtf8Error),
         }
     }
@@ -152,11 +164,11 @@ impl<'a> ConstantPoolResolve<'a> for FieldType {
     type Error = FieldTypeError;
 
     fn resolve<'b>(
-        value: &RawConstantItem<'a>,
-        pool: &'b ConstantPool<'a>,
+        value: &ConstantItem<'a>,
+        _pool: &'b ConstantPool<'a>,
     ) -> Result<Self, Self::Error> {
         match value {
-            RawConstantItem::Utf8(value) => Self::from_str(*value),
+            ConstantItem::Utf8(value) => Self::from_str(value),
             _ => Err(FieldTypeError::NonUtf8Type),
         }
     }
@@ -180,21 +192,20 @@ impl FieldType {
             'J' => FieldType::Long,
             'S' => FieldType::Short,
             'Z' => FieldType::Boolean,
-            value => {
-                return Err(FieldTypeError::Unknown);
-            }
+            _ => return Err(FieldTypeError::Unknown),
         })
     }
 
     fn from_class_name(value: &mut Chars<'_>) -> FieldTypeResult {
         let mut output = String::new();
-        while let Some(value) = value.next() {
+        for value in value.by_ref() {
             if value == ';' {
                 return Ok(FieldType::Object(output));
             }
             output.push(value);
         }
-        return Err(FieldTypeError::ObjectNotClosed);
+
+        Err(FieldTypeError::ObjectNotClosed)
     }
 
     fn from_str_array(value: &mut Chars<'_>) -> FieldTypeResult {
@@ -229,12 +240,12 @@ impl Display for FieldType {
             Self::Float => "float",
             Self::Int => "int",
             Self::Long => "long",
-            Self::Object(value) => match ObjectPath::from_str(value) {
+            Self::Object(value) => match Class::from_str(value) {
                 Ok(value) => {
                     return f.write_str(value.class);
                 }
                 Err(_) => {
-                    let value = value.replace("/", ".");
+                    let value = value.replace('/', ".");
                     return f.write_str(&value);
                 }
             },
@@ -289,11 +300,11 @@ impl<'a> ConstantPoolResolve<'a> for MethodDescriptor {
     type Error = MetDescError;
 
     fn resolve<'b>(
-        value: &RawConstantItem<'a>,
-        pool: &'b ConstantPool<'a>,
+        value: &ConstantItem<'a>,
+        _pool: &'b ConstantPool<'a>,
     ) -> Result<Self, Self::Error> {
         match value {
-            RawConstantItem::Utf8(value) => Self::from_str(*value),
+            ConstantItem::Utf8(value) => Self::from_str(value),
             _ => Err(MetDescError::NonUtf8Type),
         }
     }
@@ -349,13 +360,20 @@ mod test {
     fn test_array_parse() {
         let value = "[[Lme/jacobtread/System;";
         let desc = FieldType::from_str(value).unwrap();
-        dbg!(desc);
+        assert_eq!(
+            desc,
+            FieldType::Array {
+                dim: 2,
+                ty: Box::new(FieldType::Object("me/jacobtread/System".to_string()))
+            }
+        );
     }
 
     #[test]
     fn test_met() {
         let value = "([[[Lme/jacobtread/System;)I";
         let desc = MethodDescriptor::from_str(value).unwrap();
+
         dbg!(desc);
     }
 }

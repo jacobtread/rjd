@@ -1,6 +1,14 @@
-use std::fmt::Debug;
+use std::{fmt::Debug, str::Utf8Error};
 
 use thiserror::Error;
+
+use super::class::SourceVersion;
+
+pub type ReadResult<T> = Result<T, ReadError>;
+
+pub trait ByteReadable<'a>: Sized {
+    fn read(r: &mut ByteReader<'a>) -> ReadResult<Self>;
+}
 
 /// Structure for reading over a slice of bytes using a cursor
 /// of maintaining the current position
@@ -83,10 +91,9 @@ impl<'a> ByteReader<'a> {
         }
     }
 
-    pub fn u2_list<R, E>(&mut self, sub: bool) -> Result<Vec<R>, E>
+    pub fn u2_list<R>(&mut self, sub: bool) -> ReadResult<Vec<R>>
     where
-        R: ByteReadable<'a, Error = E> + Debug,
-        E: From<ReadError>,
+        R: ByteReadable<'a> + Debug,
     {
         let mut count = self.u2()?;
         if sub {
@@ -105,10 +112,15 @@ impl<'a> ByteReader<'a> {
     }
 }
 
-impl ByteReadable<'_> for i32 {
-    type Error = ReadError;
+impl ByteReadable<'_> for u16 {
+    #[inline]
+    fn read(r: &mut ByteReader<'_>) -> ReadResult<Self> {
+        r.u2()
+    }
+}
 
-    fn read(r: &mut ByteReader<'_>) -> Result<Self, Self::Error> {
+impl ByteReadable<'_> for i32 {
+    fn read(r: &mut ByteReader<'_>) -> ReadResult<Self> {
         let value = r.slice_4()?;
         let value = i32::from_be_bytes(value);
         Ok(value)
@@ -116,9 +128,7 @@ impl ByteReadable<'_> for i32 {
 }
 
 impl ByteReadable<'_> for f32 {
-    type Error = ReadError;
-
-    fn read(r: &mut ByteReader<'_>) -> Result<Self, Self::Error> {
+    fn read(r: &mut ByteReader<'_>) -> ReadResult<Self> {
         let value = r.slice_4()?;
         let value = f32::from_be_bytes(value);
         Ok(value)
@@ -126,9 +136,7 @@ impl ByteReadable<'_> for f32 {
 }
 
 impl ByteReadable<'_> for i64 {
-    type Error = ReadError;
-
-    fn read(r: &mut ByteReader<'_>) -> Result<Self, Self::Error> {
+    fn read(r: &mut ByteReader<'_>) -> ReadResult<Self> {
         let value = r.slice_8()?;
         let value = i64::from_be_bytes(value);
         Ok(value)
@@ -136,9 +144,7 @@ impl ByteReadable<'_> for i64 {
 }
 
 impl ByteReadable<'_> for f64 {
-    type Error = ReadError;
-
-    fn read(r: &mut ByteReader<'_>) -> Result<Self, Self::Error> {
+    fn read(r: &mut ByteReader<'_>) -> ReadResult<Self> {
         let value = r.slice_8()?;
         let value = f64::from_be_bytes(value);
         Ok(value)
@@ -147,6 +153,24 @@ impl ByteReadable<'_> for f64 {
 
 #[derive(Debug, Error)]
 pub enum ReadError {
+    #[error("Class file magic number invalid: Got {0} Expected: {1}")]
+    InvalidMagic(u32, u32),
+
+    #[error("Cannot parse unsupported class version: {0}")]
+    UnsupportedVersion(SourceVersion),
+
+    #[error("Encountered unknown major class version: {0}")]
+    UnknownMajorVersion(u16),
+
+    #[error("Unknown constant tag type: {0}")]
+    UnknownTag(u8),
+
+    #[error("Invalid utf8: {0}")]
+    InvalidUtf8(#[from] Utf8Error),
+
+    #[error("Unknown reference kind")]
+    UnknownReferenceKind,
+
     /// There wasn't enough bytes present to finish reading
     #[error("Not enough bytes to finish reading")]
     NotEnoughBytes {
@@ -162,12 +186,4 @@ pub enum ReadError {
 
     #[error("{0}")]
     Other(&'static str),
-}
-
-pub type ReadResult<T> = Result<T, ReadError>;
-
-pub trait ByteReadable<'a>: Sized {
-    type Error;
-
-    fn read(r: &mut ByteReader<'a>) -> Result<Self, Self::Error>;
 }

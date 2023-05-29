@@ -1,6 +1,6 @@
 use std::fmt::{Display, Write};
 
-use super::reader::{ByteReadable, ByteReader, ReadError};
+use super::reader::{ByteReadable, ByteReader, ReadResult};
 use bitflags::bitflags;
 
 // CLASS ACCESS FLAGS
@@ -158,27 +158,21 @@ bitflags! {
 }
 
 impl ByteReadable<'_> for ClassAccessFlags {
-    type Error = ReadError;
-
-    fn read(r: &mut ByteReader<'_>) -> Result<Self, Self::Error> {
+    fn read(r: &mut ByteReader<'_>) -> ReadResult<Self> {
         let bits = r.u2()?;
         Ok(Self::from_bits_truncate(bits))
     }
 }
 
 impl ByteReadable<'_> for FieldAccessFlags {
-    type Error = ReadError;
-
-    fn read(r: &mut ByteReader<'_>) -> Result<Self, Self::Error> {
+    fn read(r: &mut ByteReader<'_>) -> ReadResult<Self> {
         let bits = r.u2()?;
         Ok(Self::from_bits_truncate(bits))
     }
 }
 
 impl ByteReadable<'_> for MethodAccessFlags {
-    type Error = ReadError;
-
-    fn read(r: &mut ByteReader<'_>) -> Result<Self, Self::Error> {
+    fn read(r: &mut ByteReader<'_>) -> ReadResult<Self> {
         let bits = r.u2()?;
         Ok(Self::from_bits_truncate(bits))
     }

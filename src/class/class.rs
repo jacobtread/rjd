@@ -4,33 +4,13 @@ use thiserror::Error;
 
 use crate::format::{
     access::{ClassAccessFlags, FieldAccessFlags, MethodAccessFlags},
-    class::{
-        ConstantPool, ConstantPoolIndex, ConstantPoolResolve, RawAttribute, RawClassFile,
-        RawConstantItem, SourceVersion,
-    },
+    class::{ConstantPool, ConstantPoolIndex, RawAttribute, RawClassFile, SourceVersion},
 };
 
 use super::constants::{
-    FieldType, FieldTypeError, MetDescError, MethodDescriptor, NonUtf8Error, ObjectPath,
-    ObjectPathError,
+    Class, ClassResolveError, FieldType, FieldTypeError, MetDescError, MethodDescriptor,
+    NonUtf8Error,
 };
-
-#[cfg(test)]
-mod test {
-    use std::fs::read;
-
-    use crate::class::class::ClassFile;
-
-    use super::RawClassFile;
-
-    #[test]
-    fn test_parse_class() {
-        let file = read("Test.class").unwrap();
-        let class_file = RawClassFile::try_read(&file).unwrap();
-        let class_file = ClassFile::try_from(class_file).unwrap();
-        println!("{}", class_file)
-    }
-}
 
 #[derive(Debug)]
 pub struct ClassFile<'a> {
@@ -38,10 +18,10 @@ pub struct ClassFile<'a> {
     pub constant_pool: ConstantPool<'a>,
     pub access_flags: ClassAccessFlags,
 
-    pub this_class: ClassName<'a>,
-    pub super_class: Option<ClassName<'a>>,
+    pub this_class: Class<'a>,
+    pub super_class: Option<Class<'a>>,
 
-    pub interfaces: Vec<ClassName<'a>>,
+    pub interfaces: Vec<Class<'a>>,
 
     pub fields: Vec<Field<'a>>,
     pub methods: Vec<Method<'a>>,
@@ -51,7 +31,7 @@ pub struct ClassFile<'a> {
 
 impl Display for ClassFile<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let this_class = &self.this_class.0;
+        let this_class = &self.this_class;
         let package = &this_class.packages;
 
         if !package.is_empty() {
@@ -87,9 +67,8 @@ pub enum ClassResolvingError {
     #[error("Missing constant pool value: {0}")]
     MissingConstant(u16),
     #[error("{0}")]
-    ClassNameResolve(#[from] ClassNameResolveError),
-    #[error("{0}")]
-    ObjectPath(#[from] ObjectPathError),
+    ClassNameResolve(#[from] ClassResolveError),
+
     #[error("{0}")]
     NonUtf8(#[from] NonUtf8Error),
     #[error("{0}")]
@@ -104,7 +83,7 @@ impl<'a> TryFrom<RawClassFile<'a>> for ClassFile<'a> {
     fn try_from(value: RawClassFile<'a>) -> Result<Self, Self::Error> {
         let this_class = value
             .constant_pool
-            .resolve(&value.this_class)
+            .resolve(value.this_class)
             .ok_or(ClassResolvingError::MissingConstant(value.this_class))??;
 
         let super_class_index = value.super_class;
@@ -115,7 +94,7 @@ impl<'a> TryFrom<RawClassFile<'a>> for ClassFile<'a> {
             Some(
                 value
                     .constant_pool
-                    .resolve(&super_class_index)
+                    .resolve(super_class_index)
                     .ok_or(ClassResolvingError::MissingConstant(value.this_class))??,
             )
         };
@@ -125,7 +104,7 @@ impl<'a> TryFrom<RawClassFile<'a>> for ClassFile<'a> {
         for interface in value.interfaces {
             let interface = value
                 .constant_pool
-                .resolve(&super_class_index)
+                .resolve(super_class_index)
                 .ok_or(ClassResolvingError::MissingConstant(interface))??;
 
             interfaces.push(interface);
@@ -135,12 +114,12 @@ impl<'a> TryFrom<RawClassFile<'a>> for ClassFile<'a> {
         for field in value.fields {
             let name = value
                 .constant_pool
-                .resolve(&field.name_index)
-                .ok_or(ClassResolvingError::MissingConstant(field.name_index))??;
+                .resolve(field.name)
+                .ok_or(ClassResolvingError::MissingConstant(field.name))??;
             let descriptor = value
                 .constant_pool
-                .resolve(&field.descriptor_index)
-                .ok_or(ClassResolvingError::MissingConstant(field.descriptor_index))??;
+                .resolve(field.descriptor)
+                .ok_or(ClassResolvingError::MissingConstant(field.descriptor))??;
 
             fields.push(Field {
                 access_flags: field.access_flags,
@@ -154,14 +133,12 @@ impl<'a> TryFrom<RawClassFile<'a>> for ClassFile<'a> {
         for method in value.methods {
             let name = value
                 .constant_pool
-                .resolve(&method.name_index)
-                .ok_or(ClassResolvingError::MissingConstant(method.name_index))??;
+                .resolve(method.name)
+                .ok_or(ClassResolvingError::MissingConstant(method.name))??;
             let descriptor = value
                 .constant_pool
-                .resolve(&method.descriptor_index)
-                .ok_or(ClassResolvingError::MissingConstant(
-                    method.descriptor_index,
-                ))??;
+                .resolve(method.descriptor)
+                .ok_or(ClassResolvingError::MissingConstant(method.descriptor))??;
 
             methods.push(Method {
                 access_flags: method.access_flags,
@@ -182,38 +159,6 @@ impl<'a> TryFrom<RawClassFile<'a>> for ClassFile<'a> {
             methods,
             attributes: value.attributes,
         })
-    }
-}
-
-#[derive(Debug)]
-pub struct ClassName<'a>(pub ObjectPath<'a>);
-
-#[derive(Debug, Error)]
-pub enum ClassNameResolveError {
-    #[error("Unexpected constant pool type")]
-    UnexpectedType,
-
-    #[error("Missing name field")]
-    MissingName,
-
-    #[error("{0}")]
-    ObjectPath(#[from] ObjectPathError),
-}
-
-impl<'a> ConstantPoolResolve<'a> for ClassName<'a> {
-    type Error = ClassNameResolveError;
-    fn resolve<'b>(
-        value: &RawConstantItem<'a>,
-        pool: &'b ConstantPool<'a>,
-    ) -> Result<Self, Self::Error> {
-        if let RawConstantItem::Class { name_index } = value {
-            let value: ObjectPath<'a> = pool
-                .resolve(name_index)
-                .ok_or(ClassNameResolveError::MissingName)??;
-            Ok(Self(value))
-        } else {
-            Err(ClassNameResolveError::UnexpectedType)
-        }
     }
 }
 
@@ -241,16 +186,16 @@ pub enum Attribute<'a> {
         bytes: &'a [u8],
     },
     Exceptions {
-        values: Vec<ClassName<'a>>,
+        values: Vec<Class<'a>>,
     },
     InnerClasses {
-        inner_class_info: ClassName<'a>,
-        outer_class_info: Option<ClassName<'a>>,
+        inner_class_info: Class<'a>,
+        outer_class_info: Option<Class<'a>>,
         inner_name: &'a str,
         inner_class_access_flags: ClassAccessFlags,
     },
     EnclosingMethod {
-        class: ClassName<'a>,
+        class: Class<'a>,
         method_index: ConstantPoolIndex,
     },
     Synthetic,
@@ -333,4 +278,21 @@ pub struct LocalVariableTypeTableEntry {
 
 pub struct Annotation {
     type_index: Utf8Index,
+}
+
+#[cfg(test)]
+mod test {
+    use std::fs::read;
+
+    use crate::class::class::ClassFile;
+
+    use super::RawClassFile;
+
+    #[test]
+    fn test_parse_class() {
+        let file = read("Test.class").unwrap();
+        let class_file = RawClassFile::try_read(&file).unwrap();
+        let class_file = ClassFile::try_from(class_file).unwrap();
+        println!("{}", class_file)
+    }
 }

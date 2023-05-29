@@ -16,7 +16,7 @@ use bitflags::bitflags;
 // ACC_ENUM	        0x4000  Declared as an enum type.
 
 bitflags! {
-
+    #[derive(Debug)]
     pub struct ClassAccessFlags: u16 {
         const PUBLIC     = 0x0001;
         const FINAL      = 0x0010;
@@ -68,6 +68,7 @@ impl Display for ClassAccessFlags {
 // ACC_ENUM	        0x4000	Declared as an element of an enum.
 
 bitflags! {
+    #[derive(Debug)]
     pub struct FieldAccessFlags: u16 {
         const PUBLIC        = 0x0001;
         const PRIVATE       = 0x0002;
@@ -139,6 +140,7 @@ impl Display for FieldAccessFlags {
 // ACC_SYNTHETIC	0x1000	Declared synthetic; not present in the source code.
 
 bitflags! {
+    #[derive(Debug)]
     pub struct MethodAccessFlags: u16 {
         const PUBLIC        = 0x0001;
         const PRIVATE       = 0x0002;

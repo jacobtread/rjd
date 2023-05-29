@@ -3,6 +3,7 @@ use std::{
     str::{self, Utf8Error},
 };
 
+use strum_macros::{Display, FromRepr};
 use thiserror::Error;
 
 use super::{
@@ -40,7 +41,7 @@ pub struct RawClassFile<'a> {
 impl<'a> RawClassFile<'a> {
     pub const MAGIC: u32 = 0xCAFEBABE;
 
-    pub fn try_read<'b>(data: &'b [u8]) -> Result<RawClassFile<'b>, ClassReadError> {
+    pub fn try_read(data: &[u8]) -> Result<RawClassFile<'_>, ClassReadError> {
         let mut reader = ByteReader::new(data);
         let class_file = RawClassFile::read(&mut reader)?;
         Ok(class_file)
@@ -141,84 +142,32 @@ impl ByteReadable<'_> for SourceVersion {
     type Error = ReadError;
     fn read(r: &mut ByteReader<'_>) -> Result<Self, Self::Error> {
         let minor = r.u2()?;
-        let major = MajorVersion::read(r)?;
+        let major = r.u2()?;
+
+        let major: MajorVersion =
+            MajorVersion::from_repr(major).ok_or(ReadError::Other("Unknown major version"))?;
+
         Ok(Self { major, minor })
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Display, PartialEq, Eq, FromRepr)]
+#[repr(u16)]
 pub enum MajorVersion {
-    JavaLE4,
-    Java5,
-    Java6,
-    Java7,
-    Java8,
-    Java9,
-    Java10,
-    Java11,
-    Java12,
-    Java13,
-    Java14,
-    Java15,
-    Java16,
-    Java17,
-    Other(u16),
-}
-
-impl Display for MajorVersion {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
-            MajorVersion::JavaLE4 => "Java LE4",
-            MajorVersion::Java5 => "Java 5",
-            MajorVersion::Java6 => "Java 6",
-            MajorVersion::Java7 => "Java 7",
-            MajorVersion::Java8 => "Java 8",
-            MajorVersion::Java9 => "Java 9",
-            MajorVersion::Java10 => "Java 10",
-            MajorVersion::Java11 => "Java 11",
-            MajorVersion::Java12 => "Java 12",
-            MajorVersion::Java13 => "Java 13",
-            MajorVersion::Java14 => "Java 14",
-            MajorVersion::Java15 => "Java 15",
-            MajorVersion::Java16 => "Java 16",
-            MajorVersion::Java17 => "Java 17",
-            MajorVersion::Other(value) => {
-                return write!(f, "Unknown ({})", value);
-            }
-        })
-    }
-}
-
-impl From<u16> for MajorVersion {
-    fn from(value: u16) -> Self {
-        match value {
-            48 => Self::JavaLE4,
-            49 => Self::Java5,
-            50 => Self::Java6,
-            51 => Self::Java7,
-            52 => Self::Java8,
-            53 => Self::Java9,
-            54 => Self::Java10,
-            55 => Self::Java11,
-            56 => Self::Java12,
-            57 => Self::Java13,
-            58 => Self::Java14,
-            59 => Self::Java15,
-            60 => Self::Java16,
-            61 => Self::Java17,
-            value => Self::Other(value),
-        }
-    }
-}
-
-impl ByteReadable<'_> for MajorVersion {
-    type Error = ReadError;
-
-    fn read(r: &mut ByteReader<'_>) -> Result<Self, Self::Error> {
-        let major = r.u2()?;
-        let major = MajorVersion::from(major);
-        Ok(major)
-    }
+    JavaLE4 = 48,
+    Java5 = 49,
+    Java6 = 50,
+    Java7 = 51,
+    Java8 = 52,
+    Java9 = 53,
+    Java10 = 54,
+    Java11 = 55,
+    Java12 = 56,
+    Java13 = 57,
+    Java14 = 58,
+    Java15 = 59,
+    Java16 = 60,
+    Java17 = 61,
 }
 
 /// Represents an index within a constant pool
@@ -230,7 +179,7 @@ impl ByteReadable<'_> for ConstantPoolIndex {
     type Error = ReadError;
 
     #[inline]
-    fn read<'a>(r: &mut ByteReader<'a>) -> Result<Self, Self::Error> {
+    fn read(r: &mut ByteReader<'_>) -> Result<Self, Self::Error> {
         r.u2()
     }
 }
@@ -307,45 +256,37 @@ pub enum RawConstantItem<'a> {
     },
 }
 
-#[derive(Debug)]
+pub enum ConstantItem<'a> {
+    /// CONSTANT_Utf8
+    Utf8(&'a str),
+    /// CONSTANT_Integer
+    Integer(i32),
+    /// CONSTANT_Float
+    Float(f32),
+    /// CONSTANT_Long
+    Long(i64),
+    /// CONSTANT_Double
+    Double(f64),
+}
+
+impl ConstantItem<'_> {
+    const CONSTANT_UTF8: u8 = 1;
+    const CONSTANT_INTEGER: u8 = 3;
+    const CONSTANT_INTEGER: u8 = 4;
+}
+
+#[derive(Debug, FromRepr)]
+#[repr(u8)]
 pub enum ReferenceKind {
-    GetField,
-    GetStatic,
-    PutField,
-    PutStatic,
-    InvokeVirtual,
-    InvokeStatic,
-    InvokeSpecial,
-    NewInvokeSpecial,
-    InvokeInterface,
-}
-
-impl TryFrom<u8> for ReferenceKind {
-    type Error = ConstantParseError;
-
-    fn try_from(value: u8) -> Result<Self, Self::Error> {
-        Ok(match value {
-            1 => Self::GetField,
-            2 => Self::GetStatic,
-            3 => Self::PutField,
-            4 => Self::PutStatic,
-            5 => Self::InvokeVirtual,
-            6 => Self::InvokeStatic,
-            7 => Self::InvokeSpecial,
-            8 => Self::NewInvokeSpecial,
-            9 => Self::InvokeInterface,
-            _ => return Err(ConstantParseError::UnknownReferenceKind),
-        })
-    }
-}
-
-impl ByteReadable<'_> for ReferenceKind {
-    type Error = ConstantParseError;
-
-    fn read(r: &mut ByteReader<'_>) -> Result<Self, Self::Error> {
-        let kind = r.u1()?;
-        Self::try_from(kind)
-    }
+    GetField = 1,
+    GetStatic = 2,
+    PutField = 3,
+    PutStatic = 4,
+    InvokeVirtual = 5,
+    InvokeStatic = 6,
+    InvokeSpecial = 7,
+    NewInvokeSpecial = 8,
+    InvokeInterface = 9,
 }
 
 #[derive(Debug, Error)]
@@ -437,7 +378,10 @@ impl<'a> ByteReadable<'a> for RawConstantItem<'a> {
 
             // CONSTANT_MethodHandle
             15 => {
-                let reference_kind = ReferenceKind::read(r)?;
+                let reference_kind = r.u1()?;
+                let reference_kind = ReferenceKind::from_repr(reference_kind)
+                    .ok_or(ConstantParseError::UnknownReferenceKind)?;
+
                 let reference_index = ConstantPoolIndex::read(r)?;
                 Self::MethodHandle {
                     reference_kind,

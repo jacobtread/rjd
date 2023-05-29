@@ -54,7 +54,7 @@ impl Display for ClassFile<'_> {
         let this_class = &self.this_class.0;
         let package = &this_class.packages;
 
-        if package.len() > 0 {
+        if !package.is_empty() {
             writeln!(f, "package {};", package.join("."))?;
         }
 
@@ -105,7 +105,7 @@ impl<'a> TryFrom<RawClassFile<'a>> for ClassFile<'a> {
         let this_class = value
             .constant_pool
             .resolve(&value.this_class)
-            .ok_or_else(|| ClassResolvingError::MissingConstant(value.this_class))??;
+            .ok_or(ClassResolvingError::MissingConstant(value.this_class))??;
 
         let super_class_index = value.super_class;
 
@@ -116,7 +116,7 @@ impl<'a> TryFrom<RawClassFile<'a>> for ClassFile<'a> {
                 value
                     .constant_pool
                     .resolve(&super_class_index)
-                    .ok_or_else(|| ClassResolvingError::MissingConstant(value.this_class))??,
+                    .ok_or(ClassResolvingError::MissingConstant(value.this_class))??,
             )
         };
 
@@ -126,7 +126,7 @@ impl<'a> TryFrom<RawClassFile<'a>> for ClassFile<'a> {
             let interface = value
                 .constant_pool
                 .resolve(&super_class_index)
-                .ok_or_else(|| ClassResolvingError::MissingConstant(interface))??;
+                .ok_or(ClassResolvingError::MissingConstant(interface))??;
 
             interfaces.push(interface);
         }
@@ -136,11 +136,11 @@ impl<'a> TryFrom<RawClassFile<'a>> for ClassFile<'a> {
             let name = value
                 .constant_pool
                 .resolve(&field.name_index)
-                .ok_or_else(|| ClassResolvingError::MissingConstant(field.name_index))??;
+                .ok_or(ClassResolvingError::MissingConstant(field.name_index))??;
             let descriptor = value
                 .constant_pool
                 .resolve(&field.descriptor_index)
-                .ok_or_else(|| ClassResolvingError::MissingConstant(field.descriptor_index))??;
+                .ok_or(ClassResolvingError::MissingConstant(field.descriptor_index))??;
 
             fields.push(Field {
                 access_flags: field.access_flags,
@@ -155,11 +155,13 @@ impl<'a> TryFrom<RawClassFile<'a>> for ClassFile<'a> {
             let name = value
                 .constant_pool
                 .resolve(&method.name_index)
-                .ok_or_else(|| ClassResolvingError::MissingConstant(method.name_index))??;
+                .ok_or(ClassResolvingError::MissingConstant(method.name_index))??;
             let descriptor = value
                 .constant_pool
                 .resolve(&method.descriptor_index)
-                .ok_or_else(|| ClassResolvingError::MissingConstant(method.descriptor_index))??;
+                .ok_or(ClassResolvingError::MissingConstant(
+                    method.descriptor_index,
+                ))??;
 
             methods.push(Method {
                 access_flags: method.access_flags,
@@ -204,15 +206,13 @@ impl<'a> ConstantPoolResolve<'a> for ClassName<'a> {
         value: &RawConstantItem<'a>,
         pool: &'b ConstantPool<'a>,
     ) -> Result<Self, Self::Error> {
-        match value {
-            RawConstantItem::Class { name_index } => {
-                let value: ObjectPath<'a> = pool
-                    .resolve(name_index)
-                    .ok_or(ClassNameResolveError::MissingName)??;
-
-                Ok(Self(value))
-            }
-            _ => Err(ClassNameResolveError::UnexpectedType),
+        if let RawConstantItem::Class { name_index } = value {
+            let value: ObjectPath<'a> = pool
+                .resolve(name_index)
+                .ok_or(ClassNameResolveError::MissingName)??;
+            Ok(Self(value))
+        } else {
+            Err(ClassNameResolveError::UnexpectedType)
         }
     }
 }
@@ -257,9 +257,15 @@ pub enum Attribute<'a> {
     Signature(&'a str),
     SourceFile(&'a str),
     SourceDebugExtension(&'a [u8]),
-    LineNumberTable,
-    LocalVariableTable,
-    LocalVariableTypeTable,
+    LineNumberTable {
+        values: Vec<LineNumberTableEntry>,
+    },
+    LocalVariableTable {
+        values: Vec<LocalVariableTableEntry>,
+    },
+    LocalVariableTypeTable {
+        values: Vec<LocalVariableTypeTableEntry>,
+    },
     Deprecated,
     RuntimeVisibleAnnotations,
     RuntimeInvisibleAnnotations,
@@ -273,6 +279,15 @@ pub enum Attribute<'a> {
 
     Other(&'a str, &'a [u8]),
 }
+
+/// Index that can be resolved in a constant pool to gain a Utf8 value
+#[derive(Debug)]
+pub struct Utf8Index(ConstantPoolIndex);
+
+/// Index that can be resolved in a constant pool to gain a Utf8 value
+/// that can then be decoded into a descriptor
+#[derive(Debug)]
+pub struct DescriptorIndex(ConstantPoolIndex);
 
 #[derive(Debug)]
 
@@ -292,4 +307,30 @@ pub struct ExceptionTableEntry {
     pub catch_type: ConstantPoolIndex,
 }
 
-pub struct LineNumberTableEntry {}
+#[derive(Debug)]
+pub struct LineNumberTableEntry {
+    start_pc: u16,
+    line_number: u16,
+}
+
+#[derive(Debug)]
+pub struct LocalVariableTableEntry {
+    start_pc: u16,
+    length: u16,
+    name_index: Utf8Index,
+    descriptor_index: DescriptorIndex,
+    index: u16,
+}
+
+#[derive(Debug)]
+pub struct LocalVariableTypeTableEntry {
+    start_pc: u16,
+    length: u16,
+    name_index: Utf8Index,
+    signature_index: Utf8Index,
+    index: u16,
+}
+
+pub struct Annotation {
+    type_index: Utf8Index,
+}

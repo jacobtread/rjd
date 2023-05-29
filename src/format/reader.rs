@@ -159,6 +159,9 @@ pub enum ReadError {
         /// The number of bytes required
         needed: usize,
     },
+
+    #[error("{0}")]
+    Other(&'static str),
 }
 
 pub type ReadResult<T> = Result<T, ReadError>;

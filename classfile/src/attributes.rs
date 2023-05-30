@@ -1,5 +1,5 @@
 use nom::{
-    combinator::{fail, flat_map, map, map_parser, map_res, rest},
+    combinator::{fail, map, map_parser, map_res, rest},
     multi::{count, length_count, length_data},
     number::complete::{be_u16, be_u32, u8},
     sequence::tuple,
@@ -26,9 +26,9 @@ enum AttributeError {
 }
 
 #[derive(Debug)]
-pub enum Attribute<'a> {
+pub enum Attribute {
     ConstantValue(constant_pool::PoolIndex),
-    Code(Code<'a>),
+    Code(Code),
     StackMapTable(StackMapTable),
     Exceptions(Exceptions),
     InnerClasses(InnerClasses),
@@ -36,7 +36,7 @@ pub enum Attribute<'a> {
     Synthetic,
     Signature(Signature),
     SourceFile(SourceFile),
-    SourceDebugExtension(SourceDebugExtension<'a>),
+    SourceDebugExtension(SourceDebugExtension),
     LineNumberTable(LineNumberTable),
     LocalVariableTable(LocalVariableTable),
     LocalVariableTypeTable(LocalVariableTypeTable),
@@ -50,27 +50,24 @@ pub enum Attribute<'a> {
     AnnotationDefault(ElementValue),
     BootstrapMethods(BootstrapMethods),
     MethodParameters(MethodParameters),
-    Other(&'a str, &'a [u8]),
+    // TODO: Avoid this heap allocation by just ignoring other attributes
+    Other(String, Vec<u8>),
 }
 
 #[derive(Debug)]
-pub struct Attributes<'a> {
-    pub attributes: Vec<Attribute<'a>>,
+pub struct Attributes {
+    pub attributes: Vec<Attribute>,
 }
 
 pub fn attributes<'b, 'a: 'b>(
     pool: &'b ConstantPool<'a>,
-) -> impl FnMut(&'a [u8]) -> IResult<&'a [u8], Attributes<'a>> + 'b {
-    move |input| {
-        map(length_count(be_u16, attribute(pool)), |attributes| {
-            Attributes { attributes }
-        })(input)
-    }
+) -> impl FnMut(&'a [u8]) -> IResult<&'a [u8], Vec<Attribute>> + 'b {
+    move |input| length_count(be_u16, attribute(pool))(input)
 }
 
 pub fn attribute<'b, 'a: 'b>(
     pool: &'b ConstantPool<'a>,
-) -> impl FnMut(&'a [u8]) -> IResult<&'a [u8], Attribute<'a>> + 'b {
+) -> impl FnMut(&'a [u8]) -> IResult<&'a [u8], Attribute> + 'b {
     move |input| {
         // The name field of the attribute
         let (input, name) = map_res(be_u16, |value| match pool.get(value) {
@@ -105,7 +102,7 @@ pub fn attribute<'b, 'a: 'b>(
             "AnnotationDefault" => annotation_default(info),
             "BootstrapMethods" => bootstrap_methods(info),
             "MethodParameters" => method_parameters(info),
-            _ => return Ok((input, Attribute::Other(name, info))),
+            _ => return Ok((input, Attribute::Other(name.to_string(), info.to_vec()))),
         }?;
 
         // The remaining data (_left) is discarded
@@ -114,7 +111,7 @@ pub fn attribute<'b, 'a: 'b>(
     }
 }
 
-fn annotation_default(input: &[u8]) -> IResult<&[u8], Attribute<'_>> {
+fn annotation_default(input: &[u8]) -> IResult<&[u8], Attribute> {
     map(element_value, Attribute::AnnotationDefault)(input)
 }
 
@@ -123,17 +120,17 @@ pub struct ConstantValue {
     pub index: u16,
 }
 
-fn constant_value(input: &[u8]) -> IResult<&[u8], Attribute<'_>> {
+fn constant_value(input: &[u8]) -> IResult<&[u8], Attribute> {
     map(be_u16, Attribute::ConstantValue)(input)
 }
 
 #[derive(Debug)]
-pub struct Code<'a> {
+pub struct Code {
     pub max_stack: u16,
     pub max_locals: u16,
     pub code: Vec<Instruction>,
     pub exception_table: Vec<CodeException>,
-    pub attributes: Attributes<'a>,
+    pub attributes: Vec<Attribute>,
 }
 
 fn code_bytes(input: &[u8]) -> IResult<&[u8], Vec<Instruction>> {
@@ -170,7 +167,7 @@ pub struct CodeException {
 
 pub fn code<'b, 'a: 'b>(
     pool: &'b ConstantPool<'a>,
-) -> impl FnMut(&'a [u8]) -> IResult<&'a [u8], Attribute<'a>> + 'b {
+) -> impl FnMut(&'a [u8]) -> IResult<&'a [u8], Attribute> + 'b {
     move |input| {
         map(
             tuple((
@@ -360,7 +357,7 @@ pub struct Exceptions {
     pub exceptions: Vec<constant_pool::ClassIndex>,
 }
 
-fn exceptions(input: &[u8]) -> IResult<&[u8], Attribute<'_>> {
+fn exceptions(input: &[u8]) -> IResult<&[u8], Attribute> {
     map(length_count(be_u16, be_u16), |exceptions| {
         Attribute::Exceptions(Exceptions { exceptions })
     })(input)
@@ -403,7 +400,7 @@ pub struct EnclosingMethod {
     pub method: constant_pool::NameAndTypeIndex,
 }
 
-fn enclosing_method(input: &[u8]) -> IResult<&[u8], Attribute<'_>> {
+fn enclosing_method(input: &[u8]) -> IResult<&[u8], Attribute> {
     map(tuple((be_u16, be_u16)), |(class, method)| {
         Attribute::EnclosingMethod(EnclosingMethod { class, method })
     })(input)
@@ -432,13 +429,15 @@ fn source_file(input: &[u8]) -> IResult<&[u8], Attribute> {
 }
 
 #[derive(Debug)]
-pub struct SourceDebugExtension<'a> {
-    pub debug_extension: &'a [u8],
+pub struct SourceDebugExtension {
+    pub debug_extension: Vec<u8>,
 }
 
 fn source_debug_ext(input: &[u8]) -> IResult<&[u8], Attribute> {
-    map(rest, |debug_extension| {
-        Attribute::SourceDebugExtension(SourceDebugExtension { debug_extension })
+    map(rest, |debug_extension: &[u8]| {
+        Attribute::SourceDebugExtension(SourceDebugExtension {
+            debug_extension: debug_extension.to_vec(),
+        })
     })(input)
 }
 
@@ -637,7 +636,7 @@ pub struct RuntimeVisibleAnnotations {
     pub annotations: Vec<Annotation>,
 }
 
-fn runtime_visible_annotations(input: &[u8]) -> IResult<&[u8], Attribute<'_>> {
+fn runtime_visible_annotations(input: &[u8]) -> IResult<&[u8], Attribute> {
     map(annotations, |annotations| {
         Attribute::RuntimeVisibleAnnotations(RuntimeVisibleAnnotations { annotations })
     })(input)
@@ -648,7 +647,7 @@ pub struct RuntimeInvisibleAnnotations {
     pub annotations: Vec<Annotation>,
 }
 
-fn runtime_invisible_annotations(input: &[u8]) -> IResult<&[u8], Attribute<'_>> {
+fn runtime_invisible_annotations(input: &[u8]) -> IResult<&[u8], Attribute> {
     map(annotations, |annotations| {
         Attribute::RuntimeVisibleAnnotations(RuntimeVisibleAnnotations { annotations })
     })(input)
@@ -659,7 +658,7 @@ pub struct RuntimeVisibleParameterAnnotations {
     pub annotations: Vec<Vec<Annotation>>,
 }
 
-fn runtime_visible_param_annotations(input: &[u8]) -> IResult<&[u8], Attribute<'_>> {
+fn runtime_visible_param_annotations(input: &[u8]) -> IResult<&[u8], Attribute> {
     map(length_count(be_u16, annotations), |annotations| {
         Attribute::RuntimeVisibleParameterAnnotations(RuntimeVisibleParameterAnnotations {
             annotations,
@@ -672,7 +671,7 @@ pub struct RuntimeInvisibleParameterAnnotations {
     pub annotations: Vec<Vec<Annotation>>,
 }
 
-fn runtime_invisible_param_annotations(input: &[u8]) -> IResult<&[u8], Attribute<'_>> {
+fn runtime_invisible_param_annotations(input: &[u8]) -> IResult<&[u8], Attribute> {
     map(length_count(be_u16, annotations), |annotations| {
         Attribute::RuntimeInvisibleParameterAnnotations(RuntimeInvisibleParameterAnnotations {
             annotations,

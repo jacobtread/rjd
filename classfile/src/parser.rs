@@ -10,7 +10,7 @@ use nom::{
 use strum_macros::FromRepr;
 use thiserror::Error;
 
-use crate::attributes::{attributes, Attributes};
+use crate::attributes::{attributes, Attribute};
 
 #[derive(Debug)]
 pub struct ClassFile<'a> {
@@ -20,9 +20,9 @@ pub struct ClassFile<'a> {
     pub this_class: constant_pool::ClassIndex,
     pub super_class: constant_pool::ClassIndex,
     pub interfaces: Vec<constant_pool::ClassIndex>,
-    pub fields: Vec<Field<'a>>,
-    pub methods: Vec<Method<'a>>,
-    pub attributes: Attributes<'a>,
+    pub fields: Vec<Field>,
+    pub methods: Vec<Method>,
+    pub attributes: Vec<Attribute>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -79,19 +79,19 @@ bitflags! {
 }
 
 #[derive(Debug)]
-pub struct Field<'a> {
+pub struct Field {
     pub access_flags: AccessFlags,
     pub name: constant_pool::Utf8Index,
     pub descriptor: constant_pool::FieldDescriptorIndex,
-    pub attributes: Attributes<'a>,
+    pub attributes: Vec<Attribute>,
 }
 
 #[derive(Debug)]
-pub struct Method<'a> {
+pub struct Method {
     pub access_flags: AccessFlags,
     pub name: constant_pool::Utf8Index,
     pub descriptor: constant_pool::MethodDescriptorIndex,
-    pub attributes: Attributes<'a>,
+    pub attributes: Vec<Attribute>,
 }
 
 #[derive(Debug, Error)]
@@ -122,7 +122,7 @@ pub fn access_flags(input: &[u8]) -> IResult<&[u8], AccessFlags> {
 pub fn fields<'b, 'a: 'b>(
     pool: &'b constant_pool::ConstantPool<'a>,
     input: &'a [u8],
-) -> IResult<&'a [u8], Vec<Field<'a>>> {
+) -> IResult<&'a [u8], Vec<Field>> {
     length_count(
         be_u16,
         map(
@@ -140,7 +140,7 @@ pub fn fields<'b, 'a: 'b>(
 pub fn methods<'b, 'a: 'b>(
     pool: &'b constant_pool::ConstantPool<'a>,
     input: &'a [u8],
-) -> IResult<&'a [u8], Vec<Method<'a>>> {
+) -> IResult<&'a [u8], Vec<Method>> {
     length_count(
         be_u16,
         map(
@@ -407,7 +407,6 @@ pub mod constant_pool {
 
 #[cfg(test)]
 mod test {
-    use crate::attributes::Attribute;
 
     use super::{magic_bytes, parse_class_file, source_version, MajorVersion};
 
@@ -445,6 +444,6 @@ mod test {
         let example = include_bytes!("../tests/Example.class");
         let (_, class_file) = parse_class_file(example).unwrap();
 
-        println!("{:?}", class_file);
+        dbg!(class_file);
     }
 }

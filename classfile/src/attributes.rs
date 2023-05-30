@@ -24,7 +24,7 @@ enum AttributeError {
 
 #[derive(Debug)]
 pub enum Attribute<'a> {
-    ConstantValue(ConstantValue),
+    ConstantValue(constant_pool::PoolIndex),
     Code(Code<'a>),
     StackMapTable(StackMapTable),
     Exceptions(Exceptions),
@@ -121,9 +121,7 @@ pub struct ConstantValue {
 }
 
 fn constant_value(input: &[u8]) -> IResult<&[u8], Attribute<'_>> {
-    map(be_u16, |index| {
-        Attribute::ConstantValue(ConstantValue { index })
-    })(input)
+    map(be_u16, Attribute::ConstantValue)(input)
 }
 
 #[derive(Debug)]

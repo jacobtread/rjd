@@ -1,5 +1,4 @@
 use nom::{
-    bytes::complete::take,
     combinator::{fail, map, map_res, rest},
     multi::{count, length_count, length_data},
     number::complete::{be_u16, be_u32, u8},
@@ -48,7 +47,6 @@ pub enum Attribute<'a> {
     AnnotationDefault(ElementValue),
     BootstrapMethods(BootstrapMethods),
     MethodParameters(MethodParameters),
-    // TODO:
     Other(&'a str, &'a [u8]),
 }
 
@@ -57,61 +55,60 @@ pub struct Attributes<'a> {
     pub attributes: Vec<Attribute<'a>>,
 }
 
-pub fn attributes<'a>(
-    input: &'a [u8],
-    pool: &ConstantPool<'a>,
-) -> IResult<&'a [u8], Attributes<'a>> {
-    let (mut input, length) = be_u16(input)?;
-
-    let mut attributes = Vec::with_capacity(length as usize);
-    for _ in 0..length {
-        let (i, attribute) = attribute(input, pool)?;
-        attributes.push(attribute);
-        input = i;
+pub fn attributes<'b, 'a: 'b>(
+    pool: &'b ConstantPool<'a>,
+) -> impl FnMut(&'a [u8]) -> IResult<&'a [u8], Attributes<'a>> + 'b {
+    move |input| {
+        map(length_count(be_u16, attribute(pool)), |attributes| {
+            Attributes { attributes }
+        })(input)
     }
-
-    Ok((input, Attributes { attributes }))
 }
 
-pub fn attribute<'a>(input: &'a [u8], pool: &ConstantPool<'a>) -> IResult<&'a [u8], Attribute<'a>> {
-    let (input, name) = map_res(be_u16, |value| match pool.get(value) {
-        Some(ConstantItem::Utf8(name)) => Ok(*name),
-        _ => Err(AttributeError::InvalidAttributeName),
-    })(input)?;
+pub fn attribute<'b, 'a: 'b>(
+    pool: &'b ConstantPool<'a>,
+) -> impl FnMut(&'a [u8]) -> IResult<&'a [u8], Attribute<'a>> + 'b {
+    move |input| {
+        // The name field of the attribute
+        let (input, name) = map_res(be_u16, |value| match pool.get(value) {
+            Some(ConstantItem::Utf8(name)) => Ok(*name),
+            _ => Err(AttributeError::InvalidAttributeName),
+        })(input)?;
 
-    let (input, length) = be_u32(input)?;
-    let (input, info) = take(length)(input)?;
+        // The actual byte content of the attribute
+        let (input, info) = length_data(be_u32)(input)?;
 
-    let (_left, attribute) = match name {
-        "ConstantValue" => constant_value(info),
-        "Code" => code(info, pool),
-        "StackMapTable" => stack_map_table(info),
-        "Exceptions" => exceptions(info),
-        "InnerClasses" => inner_classes(info),
-        "EnclosingMethod" => enclosing_method(info),
-        "Synthetic" => return Ok((input, Attribute::Synthetic)),
-        "Signature" => signature(info),
-        "SourceFile" => source_file(info),
-        "SourceDebugExtension" => source_debug_ext(info),
-        "LineNumberTable" => line_number_table(info),
-        "LocalVariableTable" => local_variable_table(info),
-        "LocalVariableTypeTable" => local_variable_type_table(info),
-        "Deprecated" => return Ok((input, Attribute::Deprecated)),
-        "RuntimeVisibleAnnotations" => runtime_visible_annotations(info),
-        "RuntimeInvisibleAnnotations" => runtime_invisible_annotations(info),
-        "RuntimeVisibleParameterAnnotations" => runtime_visible_param_annotations(info),
-        "RuntimeInvisibleParameterAnnotations" => runtime_invisible_param_annotations(info),
-        "RuntimeVisibleTypeAnnotations" => runtime_visible_type_annot(info),
-        "RuntimeInvisibleTypeAnnotations" => runtime_invisible_type_annot(info),
-        "AnnotationDefault" => annotation_default(info),
-        "BootstrapMethods" => bootstrap_methods(info),
-        "MethodParameters" => method_parameters(info),
-        _ => return Ok((input, Attribute::Other(name, info))),
-    }?;
+        let (_left, attribute) = match name {
+            "ConstantValue" => constant_value(info),
+            "Code" => code(pool)(info),
+            "StackMapTable" => stack_map_table(info),
+            "Exceptions" => exceptions(info),
+            "InnerClasses" => inner_classes(info),
+            "EnclosingMethod" => enclosing_method(info),
+            "Synthetic" => return Ok((input, Attribute::Synthetic)),
+            "Signature" => signature(info),
+            "SourceFile" => source_file(info),
+            "SourceDebugExtension" => source_debug_ext(info),
+            "LineNumberTable" => line_number_table(info),
+            "LocalVariableTable" => local_variable_table(info),
+            "LocalVariableTypeTable" => local_variable_type_table(info),
+            "Deprecated" => return Ok((input, Attribute::Deprecated)),
+            "RuntimeVisibleAnnotations" => runtime_visible_annotations(info),
+            "RuntimeInvisibleAnnotations" => runtime_invisible_annotations(info),
+            "RuntimeVisibleParameterAnnotations" => runtime_visible_param_annotations(info),
+            "RuntimeInvisibleParameterAnnotations" => runtime_invisible_param_annotations(info),
+            "RuntimeVisibleTypeAnnotations" => runtime_visible_type_annot(info),
+            "RuntimeInvisibleTypeAnnotations" => runtime_invisible_type_annot(info),
+            "AnnotationDefault" => annotation_default(info),
+            "BootstrapMethods" => bootstrap_methods(info),
+            "MethodParameters" => method_parameters(info),
+            _ => return Ok((input, Attribute::Other(name, info))),
+        }?;
 
-    // TODO: Ensure _left has nothing left in it
+        // The remaining data (_left) is discarded
 
-    Ok((input, attribute))
+        Ok((input, attribute))
+    }
 }
 
 fn annotation_default(input: &[u8]) -> IResult<&[u8], Attribute<'_>> {
@@ -146,20 +143,29 @@ pub struct CodeException {
     pub catch_type: constant_pool::ClassIndex,
 }
 
-fn code<'a>(input: &'a [u8], pool: &ConstantPool<'a>) -> IResult<&'a [u8], Attribute<'a>> {
-    let (input, max_stack) = be_u16(input)?;
-    let (input, max_locals) = be_u16(input)?;
-    let (input, code) = length_data(be_u32)(input)?;
-    let (input, exception_table) = length_count(be_u16, code_exception)(input)?;
-    let (input, attributes) = attributes(input, pool)?;
-    let code = Code {
-        max_stack,
-        max_locals,
-        code,
-        exception_table,
-        attributes,
-    };
-    Ok((input, Attribute::Code(code)))
+pub fn code<'b, 'a: 'b>(
+    pool: &'b ConstantPool<'a>,
+) -> impl FnMut(&'a [u8]) -> IResult<&'a [u8], Attribute<'a>> + 'b {
+    move |input| {
+        map(
+            tuple((
+                be_u16,
+                be_u16,
+                length_data(be_u32),
+                length_count(be_u16, code_exception),
+                attributes(pool),
+            )),
+            |(max_stack, max_locals, code, exception_table, attributes)| {
+                Attribute::Code(Code {
+                    max_stack,
+                    max_locals,
+                    code,
+                    exception_table,
+                    attributes,
+                })
+            },
+        )(input)
+    }
 }
 
 fn code_exception(input: &[u8]) -> IResult<&[u8], CodeException> {

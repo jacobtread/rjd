@@ -2,7 +2,7 @@ use bitflags::bitflags;
 use nom::{
     bytes::streaming::tag,
     combinator::{map, map_res},
-    multi::count,
+    multi::length_count,
     number::streaming::be_u16,
     sequence::tuple,
     IResult,
@@ -119,63 +119,40 @@ pub fn access_flags(input: &[u8]) -> IResult<&[u8], AccessFlags> {
     map(be_u16, AccessFlags::from_bits_retain)(input)
 }
 
-fn interfaces(input: &[u8]) -> IResult<&[u8], Vec<u16>> {
-    let (input, interfaces_count) = be_u16(input)?;
-    count(be_u16, interfaces_count as usize)(input)
-}
-
-fn fields<'a>(
+pub fn fields<'b, 'a: 'b>(
+    pool: &'b constant_pool::ConstantPool<'a>,
     input: &'a [u8],
-    pool: &constant_pool::ConstantPool<'a>,
 ) -> IResult<&'a [u8], Vec<Field<'a>>> {
-    let (mut input, fields_count) = be_u16(input)?;
-
-    let mut output = Vec::with_capacity(fields_count as usize);
-
-    for _ in 0..fields_count {
-        let (i, access_flags) = access_flags(input)?;
-        let (i, name) = be_u16(i)?;
-        let (i, descriptor) = be_u16(i)?;
-        let (i, attributes) = attributes(i, pool)?;
-
-        output.push(Field {
-            access_flags,
-            name,
-            descriptor,
-            attributes,
-        });
-
-        input = i;
-    }
-
-    Ok((input, output))
+    length_count(
+        be_u16,
+        map(
+            tuple((access_flags, be_u16, be_u16, attributes(pool))),
+            |(access_flags, name, descriptor, attributes)| Field {
+                access_flags,
+                name,
+                descriptor,
+                attributes,
+            },
+        ),
+    )(input)
 }
 
-fn methods<'a>(
+pub fn methods<'b, 'a: 'b>(
+    pool: &'b constant_pool::ConstantPool<'a>,
     input: &'a [u8],
-    pool: &constant_pool::ConstantPool<'a>,
 ) -> IResult<&'a [u8], Vec<Method<'a>>> {
-    let (mut input, methods_count) = be_u16(input)?;
-
-    let mut output = Vec::with_capacity(methods_count as usize);
-
-    for _ in 0..methods_count {
-        let (i, access_flags) = access_flags(input)?;
-        let (i, name) = be_u16(i)?;
-        let (i, descriptor) = be_u16(i)?;
-        let (i, attributes) = attributes(i, pool)?;
-
-        output.push(Method {
-            access_flags,
-            name,
-            descriptor,
-            attributes,
-        });
-
-        input = i;
-    }
-
-    Ok((input, output))
+    length_count(
+        be_u16,
+        map(
+            tuple((access_flags, be_u16, be_u16, attributes(pool))),
+            |(access_flags, name, descriptor, attributes)| Method {
+                access_flags,
+                name,
+                descriptor,
+                attributes,
+            },
+        ),
+    )(input)
 }
 
 pub fn parse_class_file(input: &[u8]) -> IResult<&[u8], ClassFile> {
@@ -185,10 +162,11 @@ pub fn parse_class_file(input: &[u8]) -> IResult<&[u8], ClassFile> {
     let (input, access_flags) = access_flags(input)?;
     let (input, this_class) = be_u16(input)?;
     let (input, super_class) = be_u16(input)?;
-    let (input, interfaces) = interfaces(input)?;
-    let (input, fields) = fields(input, &constant_pool)?;
-    let (input, methods) = methods(input, &constant_pool)?;
-    let (input, attributes) = attributes(input, &constant_pool)?;
+    let (input, interfaces) = length_count(be_u16, be_u16)(input)?;
+
+    let (input, fields) = fields(&constant_pool, input)?;
+    let (input, methods) = methods(&constant_pool, input)?;
+    let (input, attributes) = attributes(&constant_pool)(input)?;
     let class = ClassFile {
         source_version,
         constant_pool,

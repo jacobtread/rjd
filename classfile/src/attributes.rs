@@ -1,5 +1,5 @@
 use nom::{
-    combinator::{fail, map, map_res, rest},
+    combinator::{fail, flat_map, map, map_parser, map_res, rest},
     multi::{count, length_count, length_data},
     number::complete::{be_u16, be_u32, u8},
     sequence::tuple,
@@ -131,35 +131,33 @@ fn constant_value(input: &[u8]) -> IResult<&[u8], Attribute<'_>> {
 pub struct Code<'a> {
     pub max_stack: u16,
     pub max_locals: u16,
-    pub code: &'a [u8],
+    pub code: Vec<Instruction>,
     pub exception_table: Vec<CodeException>,
     pub attributes: Attributes<'a>,
 }
 
-impl Code<'_> {
-    pub fn parse(&self) -> Result<Vec<Instruction>, nom::Err<nom::error::Error<&[u8]>>> {
-        let mut input = self.code;
-        let mut last_length = input.len();
-        let mut pos = 0;
+fn code_bytes(input: &[u8]) -> IResult<&[u8], Vec<Instruction>> {
+    let mut input = input;
+    let mut last_length = input.len();
+    let mut pos = 0;
 
-        let mut instructions = Vec::new();
+    let mut instructions = Vec::new();
 
-        while last_length > 0 {
-            let (i, instruction) = instruction(input, false, pos)?;
+    while last_length > 0 {
+        let (i, instruction) = instruction(input, false, pos)?;
 
-            instructions.push(instruction);
+        instructions.push(instruction);
 
-            let new_length = i.len();
-            // Change in length
-            let diff = last_length - new_length;
+        let new_length = i.len();
+        // Change in length
+        let diff = last_length - new_length;
 
-            input = i;
-            last_length = new_length;
-            pos += diff as i32;
-        }
-
-        Ok(instructions)
+        input = i;
+        last_length = new_length;
+        pos += diff as i32;
     }
+
+    Ok((input, instructions))
 }
 
 #[derive(Debug)]
@@ -178,7 +176,7 @@ pub fn code<'b, 'a: 'b>(
             tuple((
                 be_u16,
                 be_u16,
-                length_data(be_u32),
+                map_parser(length_data(be_u32), code_bytes),
                 length_count(be_u16, code_exception),
                 attributes(pool),
             )),

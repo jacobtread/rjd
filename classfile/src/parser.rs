@@ -407,6 +407,8 @@ pub mod constant_pool {
 
 #[cfg(test)]
 mod test {
+    use crate::attributes::Attribute;
+
     use super::{magic_bytes, parse_class_file, source_version, MajorVersion};
 
     #[test]
@@ -443,6 +445,6 @@ mod test {
         let example = include_bytes!("../tests/Example.class");
         let (_, class_file) = parse_class_file(example).unwrap();
 
-        dbg!(class_file);
+        println!("{:?}", class_file);
     }
 }

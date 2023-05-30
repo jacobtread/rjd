@@ -42,20 +42,7 @@ fn array_type(input: &[u8]) -> IResult<&[u8], ArrayType> {
     Ok((input, array_type))
 }
 
-fn load<O>(wide: bool, mut out: O) -> impl FnMut(&[u8]) -> IResult<&[u8], Instruction>
-where
-    O: FnMut(u16) -> Instruction + Copy,
-{
-    move |input| {
-        if wide {
-            map(be_u16, out)(input)
-        } else {
-            map(u8, |value| out(value as u16))(input)
-        }
-    }
-}
-
-fn store<O>(wide: bool, mut out: O) -> impl FnMut(&[u8]) -> IResult<&[u8], Instruction>
+fn maybe_wide<O>(wide: bool, mut out: O) -> impl FnMut(&[u8]) -> IResult<&[u8], Instruction>
 where
     O: FnMut(u16) -> Instruction + Copy,
 {
@@ -134,11 +121,11 @@ pub fn instruction(input: &[u8], wide: bool, pos: i32) -> IResult<&[u8], Instruc
         0x11 => return map(be_i16, SIPush)(input),
         0x12 => return map(u8, |value| LoadConst(value as u16))(input),
         0x13 | 0x14 => return map(be_u16, LoadConst)(input),
-        0x15 => return load(wide, ILoad)(input),
-        0x16 => return load(wide, LLoad)(input),
-        0x17 => return load(wide, FLoad)(input),
-        0x18 => return load(wide, DLoad)(input),
-        0x19 => return load(wide, ALoad)(input),
+        0x15 => return maybe_wide(wide, ILoad)(input),
+        0x16 => return maybe_wide(wide, LLoad)(input),
+        0x17 => return maybe_wide(wide, FLoad)(input),
+        0x18 => return maybe_wide(wide, DLoad)(input),
+        0x19 => return maybe_wide(wide, ALoad)(input),
 
         0x1a..=0x21 => ILoad((code - 0x1a) as u16),
         0x22..=0x25 => FLoad((code - 0x22) as u16),
@@ -154,11 +141,11 @@ pub fn instruction(input: &[u8], wide: bool, pos: i32) -> IResult<&[u8], Instruc
         0x34 => CALoad,
         0x35 => SALoad,
 
-        0x36 => return store(wide, IStore)(input),
-        0x37 => return store(wide, LStore)(input),
-        0x38 => return store(wide, FStore)(input),
-        0x39 => return store(wide, DStore)(input),
-        0x3a => return store(wide, AStore)(input),
+        0x36 => return maybe_wide(wide, IStore)(input),
+        0x37 => return maybe_wide(wide, LStore)(input),
+        0x38 => return maybe_wide(wide, FStore)(input),
+        0x39 => return maybe_wide(wide, DStore)(input),
+        0x3a => return maybe_wide(wide, AStore)(input),
 
         0x3b..=0x3e => IStore((code - 0x3b) as u16),
         0x3f..=0x42 => LStore((code - 0x3f) as u16),

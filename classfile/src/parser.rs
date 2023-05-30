@@ -115,7 +115,7 @@ fn source_version(input: &[u8]) -> IResult<&[u8], SourceVersion> {
     })(input)
 }
 
-fn access_flags(input: &[u8]) -> IResult<&[u8], AccessFlags> {
+pub fn access_flags(input: &[u8]) -> IResult<&[u8], AccessFlags> {
     map(be_u16, AccessFlags::from_bits_retain)(input)
 }
 

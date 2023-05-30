@@ -1,17 +1,25 @@
 use nom::{
     bytes::complete::take,
-    combinator::{fail, map, rest},
+    combinator::{fail, flat_map, map, map_res, rest},
     multi::count,
     number::complete::{be_u16, be_u32, u8},
     sequence::tuple,
     IResult,
 };
 use strum_macros::FromRepr;
+use thiserror::Error;
 
 use crate::parser::{
+    access_flags,
     constant_pool::{self, ConstantPool},
     AccessFlags,
 };
+
+#[derive(Debug, Error)]
+enum AttributeError {
+    #[error("Invalid type path: {0}")]
+    InvalidTypePath(u8),
+}
 
 #[derive(Debug)]
 pub enum Attribute<'a> {
@@ -31,7 +39,6 @@ pub enum Attribute<'a> {
     Deprecated,
     RuntimeVisibleAnnotations(RuntimeVisibleAnnotations),
     RuntimeInvisibleAnnotations(RuntimeInvisibleAnnotations),
-    // TODO:
     RuntimeVisibleParameterAnnotations(RuntimeVisibleParameterAnnotations),
     RuntimeInvisibleParameterAnnotations(RuntimeInvisibleParameterAnnotations),
     RuntimeVisibleTypeAnnotations(RuntimeVisibleTypeAnnotations),
@@ -39,6 +46,7 @@ pub enum Attribute<'a> {
     AnnotationDefault(ElementValue),
     BootstrapMethods(BootstrapMethods),
     MethodParameters(MethodParameters),
+    // TODO:
     Other(&'a str, &'a [u8]),
 }
 
@@ -84,6 +92,13 @@ pub fn attribute<'a>(input: &'a [u8], pool: &ConstantPool<'a>) -> IResult<&'a [u
         "Deprecated" => return Ok((input, Attribute::Deprecated)),
         "RuntimeVisibleAnnotations" => runtime_visible_annotations(info),
         "RuntimeInvisibleAnnotations" => runtime_visible_annotations(info),
+        "RuntimeVisibleParameterAnnotations" => runtime_visible_param_annotations(info),
+        "RuntimeInvisibleParameterAnnotations" => runtime_invisible_param_annotations(info),
+        "RuntimeVisibleTypeAnnotations" => runtime_visible_type_annot(info),
+        "RuntimeInvisibleTypeAnnotations" => runtime_invisible_type_annot(info),
+        "AnnotationDefault" => annotation_default(info),
+        "BootstrapMethods" => bootstrap_methods(info),
+        "MethodParameters" => method_parameters(info),
         _ => return Ok((input, Attribute::Other(name, info))),
     }?;
 
@@ -92,6 +107,9 @@ pub fn attribute<'a>(input: &'a [u8], pool: &ConstantPool<'a>) -> IResult<&'a [u
     Ok((input, attribute))
 }
 
+fn annotation_default(input: &[u8]) -> IResult<&[u8], Attribute<'_>> {
+    map(element_value, |value| Attribute::AnnotationDefault(value))(input)
+}
 #[derive(Debug)]
 pub struct ConstantValue {
     pub index: u16,
@@ -616,9 +634,45 @@ pub struct RuntimeVisibleParameterAnnotations {
     pub annotations: Vec<Vec<Annotation>>,
 }
 
+fn runtime_visible_param_annotations(input: &[u8]) -> IResult<&[u8], Attribute<'_>> {
+    let (mut input, length) = be_u16(input)?;
+    let mut output = Vec::with_capacity(length as usize);
+
+    for _ in 0..length {
+        let (i, annotations) = annotations(input)?;
+        output.push(annotations);
+        input = i;
+    }
+
+    Ok((
+        input,
+        Attribute::RuntimeVisibleParameterAnnotations(RuntimeVisibleParameterAnnotations {
+            annotations: output,
+        }),
+    ))
+}
+
 #[derive(Debug)]
 pub struct RuntimeInvisibleParameterAnnotations {
     pub annotations: Vec<Vec<Annotation>>,
+}
+
+fn runtime_invisible_param_annotations(input: &[u8]) -> IResult<&[u8], Attribute<'_>> {
+    let (mut input, length) = be_u16(input)?;
+    let mut output = Vec::with_capacity(length as usize);
+
+    for _ in 0..length {
+        let (i, annotations) = annotations(input)?;
+        output.push(annotations);
+        input = i;
+    }
+
+    Ok((
+        input,
+        Attribute::RuntimeInvisibleParameterAnnotations(RuntimeInvisibleParameterAnnotations {
+            annotations: output,
+        }),
+    ))
 }
 
 #[derive(Debug)]
@@ -626,6 +680,83 @@ pub struct TypeAnnotation {
     pub target_type: TargetType,
     pub target_path: Vec<TypePathElement>,
     pub annotation: Annotation,
+}
+
+fn type_annotation(input: &[u8]) -> IResult<&[u8], TypeAnnotation> {
+    map(
+        tuple((target_type, type_path_elements, annotation)),
+        |(target_type, target_path, annotation)| TypeAnnotation {
+            target_type,
+            target_path,
+            annotation,
+        },
+    )(input)
+}
+
+fn target_type(input: &[u8]) -> IResult<&[u8], TargetType> {
+    use TargetType::*;
+    let (input, ty) = u8(input)?;
+
+    match ty {
+        0x00 => map(u8, TypeParameterClass)(input),
+        0x01 => map(u8, TypeParameterMethod)(input),
+        0x10 => map(be_u16, SuperType)(input),
+        0x11 => map(tuple((u8, u8)), |(type_parameter, bound_index)| {
+            TypeParameterBoundClass {
+                type_parameter,
+                bound_index,
+            }
+        })(input),
+        0x12 => map(tuple((u8, u8)), |(type_parameter, bound_index)| {
+            TypeParameterBoundMethod {
+                type_parameter,
+                bound_index,
+            }
+        })(input),
+        0x13 => Ok((input, EmptyField)),
+        0x14 => Ok((input, EmptyReturn)),
+        0x15 => Ok((input, EmptyReceiver)),
+        0x16 => map(u8, FormalParameter)(input),
+        0x17 => map(be_u16, Throws)(input),
+        0x40 => map(local_variable_targets, LocalVariable)(input),
+        0x41 => map(local_variable_targets, ResourceVariable)(input),
+        0x42 => map(be_u16, Catch)(input),
+        0x43 => map(be_u16, OffsetInstanceOf)(input),
+        0x44 => map(be_u16, OffsetNew)(input),
+        0x45 => map(be_u16, OffsetNewRef)(input),
+        0x46 => map(be_u16, OffsetRef)(input),
+        0x47 => map(tuple((be_u16, u8)), |(offset, type_argument)| {
+            TypeArgumentCast {
+                offset,
+                type_argument,
+            }
+        })(input),
+        0x48 => map(tuple((be_u16, u8)), |(offset, type_argument)| {
+            TypeArgumentConstructor {
+                offset,
+                type_argument,
+            }
+        })(input),
+        0x49 => map(tuple((be_u16, u8)), |(offset, type_argument)| {
+            TypeArgumentMethod {
+                offset,
+                type_argument,
+            }
+        })(input),
+        0x4A => map(tuple((be_u16, u8)), |(offset, type_argument)| {
+            TypeArgumentNewRef {
+                offset,
+                type_argument,
+            }
+        })(input),
+        0x4AB => map(tuple((be_u16, u8)), |(offset, type_argument)| {
+            TypeArgumentRef {
+                offset,
+                type_argument,
+            }
+        })(input),
+        _ => fail(input),
+    }
 }
 
 #[derive(Debug)]
@@ -717,13 +848,28 @@ pub enum TargetType {
     TypeArgumentRef { offset: u16, type_argument: u8 },
 }
 
+fn type_path_elements(input: &[u8]) -> IResult<&[u8], Vec<TypePathElement>> {
+    flat_map(u8, |length| count(type_path_element, length as usize))(input)
+}
+
 #[derive(Debug)]
 pub struct TypePathElement {
     pub path_kind: TypePathKind,
     pub argument_index: u8,
 }
 
+fn type_path_element(input: &[u8]) -> IResult<&[u8], TypePathElement> {
+    map(
+        tuple((type_path_kind, u8)),
+        |(path_kind, argument_index)| TypePathElement {
+            path_kind,
+            argument_index,
+        },
+    )(input)
+}
+
 #[derive(Debug, FromRepr)]
+#[repr(u8)]
 pub enum TypePathKind {
     /// Annotation is deeper in an array type
     ArrayType = 0,
@@ -735,6 +881,17 @@ pub enum TypePathKind {
     Type = 3,
 }
 
+fn type_path_kind(input: &[u8]) -> IResult<&[u8], TypePathKind> {
+    map_res(u8, |value| {
+        TypePathKind::from_repr(value).ok_or(AttributeError::InvalidTypePath(value))
+    })(input)
+}
+
+fn local_variable_targets(input: &[u8]) -> IResult<&[u8], Vec<LocalVariableTarget>> {
+    let (input, length) = be_u16(input)?;
+    count(local_variable_target, length as usize)(input)
+}
+
 #[derive(Debug)]
 pub struct LocalVariableTarget {
     pub start: u16,
@@ -742,9 +899,28 @@ pub struct LocalVariableTarget {
     pub index: u16,
 }
 
+fn local_variable_target(input: &[u8]) -> IResult<&[u8], LocalVariableTarget> {
+    map(tuple((be_u16, be_u16, be_u16)), |(start, length, index)| {
+        LocalVariableTarget {
+            start,
+            length,
+            index,
+        }
+    })(input)
+}
+
 #[derive(Debug)]
 pub struct RuntimeVisibleTypeAnnotations {
     pub annotations: Vec<TypeAnnotation>,
+}
+
+fn runtime_visible_type_annot(input: &[u8]) -> IResult<&[u8], Attribute> {
+    map(
+        flat_map(be_u16, |length| count(type_annotation, length as usize)),
+        |annotations| {
+            Attribute::RuntimeVisibleTypeAnnotations(RuntimeVisibleTypeAnnotations { annotations })
+        },
+    )(input)
 }
 
 #[derive(Debug)]
@@ -752,9 +928,27 @@ pub struct RuntimeInvisibleTypeAnnotations {
     pub annotations: Vec<TypeAnnotation>,
 }
 
+fn runtime_invisible_type_annot(input: &[u8]) -> IResult<&[u8], Attribute> {
+    map(
+        flat_map(be_u16, |length| count(type_annotation, length as usize)),
+        |annotations| {
+            Attribute::RuntimeInvisibleTypeAnnotations(RuntimeInvisibleTypeAnnotations {
+                annotations,
+            })
+        },
+    )(input)
+}
+
 #[derive(Debug)]
 pub struct BootstrapMethods {
     pub methods: Vec<BootstrapMethod>,
+}
+
+fn bootstrap_methods(input: &[u8]) -> IResult<&[u8], Attribute> {
+    map(
+        flat_map(be_u16, |length| count(bootstrap_method, length as usize)),
+        |methods| Attribute::BootstrapMethods(BootstrapMethods { methods }),
+    )(input)
 }
 
 #[derive(Debug)]
@@ -763,13 +957,39 @@ pub struct BootstrapMethod {
     pub arguments: Vec<constant_pool::PoolIndex>,
 }
 
+fn bootstrap_method(input: &[u8]) -> IResult<&[u8], BootstrapMethod> {
+    map(
+        tuple((
+            be_u16,
+            flat_map(be_u16, |length| count(be_u16, length as usize)),
+        )),
+        |(method_ref, arguments)| BootstrapMethod {
+            method_ref,
+            arguments,
+        },
+    )(input)
+}
+
 #[derive(Debug)]
 pub struct MethodParameters {
     pub parameters: Vec<MethodParameter>,
+}
+
+fn method_parameters(input: &[u8]) -> IResult<&[u8], Attribute> {
+    map(
+        flat_map(be_u16, |length| count(method_parameter, length as usize)),
+        |parameters| Attribute::MethodParameters(MethodParameters { parameters }),
+    )(input)
 }
 
 #[derive(Debug)]
 pub struct MethodParameter {
     pub name: constant_pool::Utf8Index,
     pub access_flags: AccessFlags,
+}
+
+fn method_parameter(input: &[u8]) -> IResult<&[u8], MethodParameter> {
+    map(tuple((be_u16, access_flags)), |(name, access_flags)| {
+        MethodParameter { name, access_flags }
+    })(input)
 }

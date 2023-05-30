@@ -1,14 +1,16 @@
 use bitflags::bitflags;
 use nom::{
     bytes::streaming::{tag, take},
-    combinator::{map, map_res, verify},
-    error::{self, Error, ErrorKind},
-    number::streaming::be_u16,
+    combinator::{complete, map, map_res},
+    multi::count,
+    number::streaming::{be_u16, be_u32},
     sequence::tuple,
     IResult,
 };
 use strum_macros::FromRepr;
 use thiserror::Error;
+
+use self::constant_pool::Utf8Index;
 
 #[derive(Debug)]
 pub struct ClassFile<'a> {
@@ -17,6 +19,10 @@ pub struct ClassFile<'a> {
     pub access_flags: AccessFlags,
     pub this_class: constant_pool::ClassIndex,
     pub super_class: constant_pool::ClassIndex,
+    pub interfaces: Vec<constant_pool::ClassIndex>,
+    pub fields: Vec<Field<'a>>,
+    pub methods: Vec<Method<'a>>,
+    pub attributes: Attributes<'a>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -72,6 +78,33 @@ bitflags! {
     }
 }
 
+#[derive(Debug)]
+pub struct Attribute<'a> {
+    pub name: Utf8Index,
+    pub info: &'a [u8],
+}
+
+#[derive(Debug)]
+pub struct Attributes<'a> {
+    pub attributes: Vec<Attribute<'a>>,
+}
+
+#[derive(Debug)]
+pub struct Field<'a> {
+    pub access_flags: AccessFlags,
+    pub name: constant_pool::Utf8Index,
+    pub descriptor: constant_pool::FieldDescriptorIndex,
+    pub attributes: Attributes<'a>,
+}
+
+#[derive(Debug)]
+pub struct Method<'a> {
+    pub access_flags: AccessFlags,
+    pub name: constant_pool::Utf8Index,
+    pub descriptor: constant_pool::MethodDescriptorIndex,
+    pub attributes: Attributes<'a>,
+}
+
 #[derive(Debug, Error)]
 pub enum ClassFormatError {
     #[error("Invalid class magic bytes")]
@@ -81,11 +114,11 @@ pub enum ClassFormatError {
     UnknownMajorVersion(u16),
 }
 
-fn take_magic_bytes(input: &[u8]) -> IResult<&[u8], &[u8]> {
+fn magic_bytes(input: &[u8]) -> IResult<&[u8], &[u8]> {
     tag([0xCA, 0xFE, 0xBA, 0xBE])(input)
 }
 
-fn take_source_version(input: &[u8]) -> IResult<&[u8], SourceVersion> {
+fn source_version(input: &[u8]) -> IResult<&[u8], SourceVersion> {
     map_res(tuple((be_u16, be_u16)), |(minor, major)| {
         MajorVersion::from_repr(major)
             .ok_or(ClassFormatError::UnknownMajorVersion(major))
@@ -93,55 +126,131 @@ fn take_source_version(input: &[u8]) -> IResult<&[u8], SourceVersion> {
     })(input)
 }
 
-fn take_access_flags(input: &[u8]) -> IResult<&[u8], AccessFlags> {
+fn access_flags(input: &[u8]) -> IResult<&[u8], AccessFlags> {
     map(be_u16, AccessFlags::from_bits_retain)(input)
 }
 
-fn take_class_file(input: &[u8]) -> IResult<&[u8], ClassFile> {
-    let (input, _) = take_magic_bytes(input)?;
-    let (input, source_version) = take_source_version(input)?;
-    let (input, constant_pool) = constant_pool::take_constant_pool(input)?;
-    let (input, access_flags) = take_access_flags(input)?;
+fn attribute(input: &[u8]) -> IResult<&[u8], Attribute<'_>> {
+    let (input, name) = be_u16(input)?;
+    let (input, length) = be_u32(input)?;
+    let (input, info) = take(length)(input)?;
+    let attribute = Attribute { name, info };
+    Ok((input, attribute))
+}
 
-    let (input, this_class) = be_u16(input)?;
-    let (input, super_class) = be_u16(input)?;
+fn attributes(input: &[u8]) -> IResult<&[u8], Attributes<'_>> {
+    let (input, length) = be_u16(input)?;
+    let (input, attributes) = count(attribute, length as usize)(input)?;
+    Ok((input, Attributes { attributes }))
+}
 
-    let class_file = ClassFile {
-        source_version,
-        constant_pool,
-        access_flags,
-        this_class,
-        super_class,
-    };
+fn interfaces(input: &[u8]) -> IResult<&[u8], Vec<u16>> {
+    let (input, interfaces_count) = be_u16(input)?;
+    count(be_u16, interfaces_count as usize)(input)
+}
 
-    Ok((input, class_file))
+fn fields(input: &[u8]) -> IResult<&[u8], Vec<Field<'_>>> {
+    let (input, fields_count) = be_u16(input)?;
+    count(
+        map(
+            tuple((access_flags, be_u16, be_u16, attributes)),
+            |(access_flags, name, descriptor, attributes)| Field {
+                access_flags,
+                name,
+                descriptor,
+                attributes,
+            },
+        ),
+        fields_count as usize,
+    )(input)
+}
+
+fn methods(input: &[u8]) -> IResult<&[u8], Vec<Method<'_>>> {
+    let (input, methods_count) = be_u16(input)?;
+    count(
+        map(
+            tuple((access_flags, be_u16, be_u16, attributes)),
+            |(access_flags, name, descriptor, attributes)| Method {
+                access_flags,
+                name,
+                descriptor,
+                attributes,
+            },
+        ),
+        methods_count as usize,
+    )(input)
+}
+
+pub fn parse_class_file(input: &[u8]) -> IResult<&[u8], ClassFile> {
+    complete(map(
+        tuple((
+            magic_bytes,
+            source_version,
+            constant_pool::take_constant_pool,
+            access_flags,
+            be_u16,
+            be_u16,
+            interfaces,
+            fields,
+            methods,
+            attributes,
+        )),
+        |(
+            _,
+            source_version,
+            constant_pool,
+            access_flags,
+            this_class,
+            super_class,
+            interfaces,
+            fields,
+            methods,
+            attributes,
+        )| ClassFile {
+            source_version,
+            constant_pool,
+            access_flags,
+            this_class,
+            super_class,
+            interfaces,
+            fields,
+            methods,
+            attributes,
+        },
+    ))(input)
 }
 
 /// Module for parsers for the constant pool
 mod constant_pool {
     use nom::{
         bytes::streaming::take,
-        combinator::{map, map_res},
-        error::ErrorKind,
+        combinator::{fail, map, map_res},
         multi,
         number::streaming::{be_f32, be_f64, be_i32, be_i64, be_u16, be_u8, u8},
         sequence::tuple,
-        Err, IResult,
+        IResult,
     };
     use strum_macros::FromRepr;
     use thiserror::Error;
 
     pub type PoolIndex = u16;
-    pub type ClassIndex = u16;
-    pub type Utf8Index = u16;
-    pub type NameAndTypeIndex = u16;
-    pub type DescriptorIndex = u16;
-    pub type FieldDescriptorIndex = u16;
-    pub type MethodDescriptorIndex = u16;
+    pub type ClassIndex = PoolIndex;
+    pub type Utf8Index = PoolIndex;
+    pub type NameAndTypeIndex = PoolIndex;
+    pub type DescriptorIndex = PoolIndex;
+    pub type FieldDescriptorIndex = PoolIndex;
+    pub type MethodDescriptorIndex = PoolIndex;
 
     #[derive(Debug)]
     pub struct ConstantPool<'a> {
         table: Vec<ConstantItem<'a>>,
+    }
+
+    impl<'a> ConstantPool<'a> {
+        pub fn get(&self, index: PoolIndex) -> Option<&ConstantItem<'a>> {
+            debug_assert!(index > 0);
+            self.table.get((index - 1) as usize)
+        }
     }
 
     #[derive(Debug)]
@@ -164,8 +273,6 @@ mod constant_pool {
 
     #[derive(Debug, Error)]
     pub enum ConstantError {
-        #[error("Unknown constant type: {0}")]
-        UnknownConstantType(u8),
         #[error("Unknown reference kind")]
         UnknownReferenceKind(u8),
     }
@@ -224,7 +331,8 @@ mod constant_pool {
 
             INVOKE_DYNAMIC => take_invoke_dynamic(input),
 
-            _ => Err(Err::Error(nom::error::Error::new(input, ErrorKind::Alt))),
+            // TODO: Proper error
+            _ => fail(input),
         }
     }
 
@@ -340,25 +448,25 @@ mod constant_pool {
 
 #[cfg(test)]
 mod test {
-    use super::{take_class_file, take_magic_bytes, take_source_version, MajorVersion};
+    use super::{magic_bytes, parse_class_file, source_version, MajorVersion};
 
     #[test]
     fn test_take_magic_bytes() {
         let bytes = [0xCA, 0xFE, 0xBA, 0xBE];
-        take_magic_bytes(&bytes).unwrap();
+        magic_bytes(&bytes).unwrap();
     }
 
     #[test]
     fn test_take_invalid_magic_bytes() {
         let bytes = [0, 0, 0xBA, 0];
-        take_magic_bytes(&bytes).unwrap_err();
+        magic_bytes(&bytes).unwrap_err();
     }
 
     #[test]
     fn test_take_source_version() {
         // Minor: 1, Major: Java 8,
         let bytes = [0, 1, 0, 52];
-        let (_, version) = take_source_version(&bytes).unwrap();
+        let (_, version) = source_version(&bytes).unwrap();
         assert_eq!(version.minor, 1);
         assert_eq!(version.major, MajorVersion::Java8);
     }
@@ -368,13 +476,13 @@ mod test {
         // Minor: 1, Major: Unknown,
         let bytes = [0, 1, 0, 255];
 
-        take_source_version(&bytes).unwrap_err();
+        source_version(&bytes).unwrap_err();
     }
 
     #[test]
     fn test_take_class_file() {
         let example = include_bytes!("../tests/Example.class");
-        let (_, class_file) = take_class_file(example).unwrap();
+        let (_, class_file) = parse_class_file(example).unwrap();
 
         dbg!(class_file);
     }

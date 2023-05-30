@@ -206,9 +206,8 @@ pub fn parse_class_file(input: &[u8]) -> IResult<&[u8], ClassFile> {
 /// Module for parsers for the constant pool
 pub mod constant_pool {
     use nom::{
-        bytes::streaming::take,
         combinator::{fail, map, map_res},
-        multi,
+        multi::{count, length_data},
         number::streaming::{be_f32, be_f64, be_i32, be_i64, be_u16, be_u8, u8},
         sequence::tuple,
         IResult,
@@ -263,7 +262,7 @@ pub mod constant_pool {
     pub fn constant_pool(input: &[u8]) -> IResult<&[u8], ConstantPool<'_>> {
         let (input, length) = be_u16(input)?;
         let length = (length - 1) as usize;
-        let (input, table) = multi::count(constant_item, length)(input)?;
+        let (input, table) = count(constant_item, length)(input)?;
         Ok((input, ConstantPool { table }))
     }
 
@@ -310,7 +309,7 @@ pub mod constant_pool {
             NAME_AND_TYPE => name_and_type(input),
 
             METHOD_HANDLE => method_handle(input),
-            METHOD_TYPE => take_method_type(input),
+            METHOD_TYPE => method_type(input),
 
             INVOKE_DYNAMIC => invoke_dynamic(input),
 
@@ -320,8 +319,7 @@ pub mod constant_pool {
     }
 
     fn utf8(input: &[u8]) -> IResult<&[u8], ConstantItem<'_>> {
-        let (input, length) = be_u16(input)?;
-        map_res(take(length), |bytes| {
+        map_res(length_data(be_u16), |bytes| {
             std::str::from_utf8(bytes).map(ConstantItem::Utf8)
         })(input)
     }

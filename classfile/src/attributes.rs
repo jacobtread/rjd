@@ -1,7 +1,7 @@
 use nom::{
     bytes::complete::take,
-    combinator::{fail, flat_map, map, map_res, rest},
-    multi::count,
+    combinator::{fail, map, map_res, rest},
+    multi::{count, length_count, length_data},
     number::complete::{be_u16, be_u32, u8},
     sequence::tuple,
     IResult,
@@ -11,7 +11,7 @@ use thiserror::Error;
 
 use crate::parser::{
     access_flags,
-    constant_pool::{self, ConstantPool},
+    constant_pool::{self, ConstantItem, ConstantPool},
     AccessFlags,
 };
 
@@ -19,6 +19,8 @@ use crate::parser::{
 enum AttributeError {
     #[error("Invalid type path: {0}")]
     InvalidTypePath(u8),
+    #[error("Attribute name constant was invalid")]
+    InvalidAttributeName,
 }
 
 #[derive(Debug)]
@@ -55,7 +57,10 @@ pub struct Attributes<'a> {
     pub attributes: Vec<Attribute<'a>>,
 }
 
-pub fn attributes<'a>(input: &[u8], pool: &ConstantPool<'a>) -> IResult<&'a [u8], Attributes<'a>> {
+pub fn attributes<'a>(
+    input: &'a [u8],
+    pool: &ConstantPool<'a>,
+) -> IResult<&'a [u8], Attributes<'a>> {
     let (mut input, length) = be_u16(input)?;
 
     let mut attributes = Vec::with_capacity(length as usize);
@@ -69,11 +74,13 @@ pub fn attributes<'a>(input: &[u8], pool: &ConstantPool<'a>) -> IResult<&'a [u8]
 }
 
 pub fn attribute<'a>(input: &'a [u8], pool: &ConstantPool<'a>) -> IResult<&'a [u8], Attribute<'a>> {
-    let (input, name) = be_u16(input)?;
+    let (input, name) = map_res(be_u16, |value| match pool.get(value) {
+        Some(ConstantItem::Utf8(name)) => Ok(*name),
+        _ => Err(AttributeError::InvalidAttributeName),
+    })(input)?;
+
     let (input, length) = be_u32(input)?;
     let (input, info) = take(length)(input)?;
-
-    let name = "";
 
     let (_left, attribute) = match name {
         "ConstantValue" => constant_value(info),
@@ -91,7 +98,7 @@ pub fn attribute<'a>(input: &'a [u8], pool: &ConstantPool<'a>) -> IResult<&'a [u
         "LocalVariableTypeTable" => local_variable_type_table(info),
         "Deprecated" => return Ok((input, Attribute::Deprecated)),
         "RuntimeVisibleAnnotations" => runtime_visible_annotations(info),
-        "RuntimeInvisibleAnnotations" => runtime_visible_annotations(info),
+        "RuntimeInvisibleAnnotations" => runtime_invisible_annotations(info),
         "RuntimeVisibleParameterAnnotations" => runtime_visible_param_annotations(info),
         "RuntimeInvisibleParameterAnnotations" => runtime_invisible_param_annotations(info),
         "RuntimeVisibleTypeAnnotations" => runtime_visible_type_annot(info),
@@ -108,8 +115,9 @@ pub fn attribute<'a>(input: &'a [u8], pool: &ConstantPool<'a>) -> IResult<&'a [u
 }
 
 fn annotation_default(input: &[u8]) -> IResult<&[u8], Attribute<'_>> {
-    map(element_value, |value| Attribute::AnnotationDefault(value))(input)
+    map(element_value, Attribute::AnnotationDefault)(input)
 }
+
 #[derive(Debug)]
 pub struct ConstantValue {
     pub index: u16,
@@ -141,10 +149,8 @@ pub struct CodeException {
 fn code<'a>(input: &'a [u8], pool: &ConstantPool<'a>) -> IResult<&'a [u8], Attribute<'a>> {
     let (input, max_stack) = be_u16(input)?;
     let (input, max_locals) = be_u16(input)?;
-    let (input, code_length) = be_u32(input)?;
-    let (input, code) = take(code_length)(input)?;
-    let (input, exception_table_length) = be_u16(input)?;
-    let (input, exception_table) = count(code_exception, exception_table_length as usize)(input)?;
+    let (input, code) = length_data(be_u32)(input)?;
+    let (input, exception_table) = length_count(be_u16, code_exception)(input)?;
     let (input, attributes) = attributes(input, pool)?;
     let code = Code {
         max_stack,
@@ -174,9 +180,9 @@ pub struct StackMapTable {
 }
 
 fn stack_map_table(input: &[u8]) -> IResult<&[u8], Attribute> {
-    let (input, frames_count) = be_u32(input)?;
-    let (input, frames) = count(stack_map_frame, frames_count as usize)(input)?;
-    Ok((input, Attribute::StackMapTable(StackMapTable { frames })))
+    map(length_count(be_u32, stack_map_frame), |frames| {
+        Attribute::StackMapTable(StackMapTable { frames })
+    })(input)
 }
 
 #[derive(Debug)]
@@ -271,21 +277,18 @@ fn stack_map_frame_6(input: &[u8], ty: u8) -> IResult<&[u8], StackMapFrame> {
 }
 
 fn stack_map_frame_7(input: &[u8]) -> IResult<&[u8], StackMapFrame> {
-    let (input, offset_delta) = be_u16(input)?;
-
-    let (input, local_count) = be_u16(input)?;
-    let (input, locals) = count(verification_type, local_count as usize)(input)?;
-    let (input, stack_size) = be_u16(input)?;
-    let (input, stack) = count(verification_type, stack_size as usize)(input)?;
-
-    Ok((
-        input,
-        StackMapFrame::Full {
+    map(
+        tuple((
+            be_u16,
+            length_count(be_u16, verification_type),
+            length_count(be_u16, verification_type),
+        )),
+        |(offset_delta, locals, stack)| StackMapFrame::Full {
             offset_delta,
             locals,
             stack,
         },
-    ))
+    )(input)
 }
 
 #[derive(Debug, Clone)]
@@ -327,10 +330,9 @@ pub struct Exceptions {
 }
 
 fn exceptions(input: &[u8]) -> IResult<&[u8], Attribute<'_>> {
-    let (input, length) = be_u16(input)?;
-    let (input, exceptions) = count(be_u16, length as usize)(input)?;
-
-    Ok((input, Attribute::Exceptions(Exceptions { exceptions })))
+    map(length_count(be_u16, be_u16), |exceptions| {
+        Attribute::Exceptions(Exceptions { exceptions })
+    })(input)
 }
 
 #[derive(Debug)]
@@ -339,9 +341,9 @@ pub struct InnerClasses {
 }
 
 fn inner_classes(input: &[u8]) -> IResult<&[u8], Attribute> {
-    let (input, number_of_classes) = be_u16(input)?;
-    let (input, classes) = count(inner_class, number_of_classes as usize)(input)?;
-    Ok((input, Attribute::InnerClasses(InnerClasses { classes })))
+    map(length_count(be_u16, inner_class), |classes| {
+        Attribute::InnerClasses(InnerClasses { classes })
+    })(input)
 }
 
 #[derive(Debug)]
@@ -405,9 +407,7 @@ pub struct SourceDebugExtension<'a> {
 
 fn source_debug_ext(input: &[u8]) -> IResult<&[u8], Attribute> {
     map(rest, |debug_extension| {
-        Attribute::SourceDebugExtension(SourceDebugExtension {
-            debug_extension: input,
-        })
+        Attribute::SourceDebugExtension(SourceDebugExtension { debug_extension })
     })(input)
 }
 
@@ -417,12 +417,9 @@ pub struct LineNumberTable {
 }
 
 fn line_number_table(input: &[u8]) -> IResult<&[u8], Attribute> {
-    let (input, table_length) = be_u16(input)?;
-    let (input, entries) = count(line_number, table_length as usize)(input)?;
-    Ok((
-        input,
-        Attribute::LineNumberTable(LineNumberTable { entries }),
-    ))
+    map(length_count(be_u16, line_number), |entries| {
+        Attribute::LineNumberTable(LineNumberTable { entries })
+    })(input)
 }
 
 #[derive(Debug)]
@@ -446,12 +443,9 @@ pub struct LocalVariableTable {
 }
 
 fn local_variable_table(input: &[u8]) -> IResult<&[u8], Attribute> {
-    let (input, table_length) = be_u16(input)?;
-    let (input, entries) = count(local_variable, table_length as usize)(input)?;
-    Ok((
-        input,
-        Attribute::LocalVariableTable(LocalVariableTable { entries }),
-    ))
+    map(length_count(be_u16, local_variable), |entries| {
+        Attribute::LocalVariableTable(LocalVariableTable { entries })
+    })(input)
 }
 
 #[derive(Debug)]
@@ -482,12 +476,9 @@ pub struct LocalVariableTypeTable {
 }
 
 fn local_variable_type_table(input: &[u8]) -> IResult<&[u8], Attribute> {
-    let (input, table_length) = be_u16(input)?;
-    let (input, entries) = count(local_variable_type, table_length as usize)(input)?;
-    Ok((
-        input,
-        Attribute::LocalVariableTypeTable(LocalVariableTypeTable { entries }),
-    ))
+    map(length_count(be_u16, local_variable_type), |entries| {
+        Attribute::LocalVariableTypeTable(LocalVariableTypeTable { entries })
+    })(input)
 }
 
 #[derive(Debug)]
@@ -519,10 +510,15 @@ pub struct Annotation {
 }
 
 fn annotation(input: &[u8]) -> IResult<&[u8], Annotation> {
-    let (input, type_index) = be_u16(input)?;
-    let (input, pairs_length) = be_u16(input)?;
-    let (input, values) = count(named_element_value, pairs_length as usize)(input)?;
-    Ok((input, Annotation { type_index, values }))
+    map(
+        tuple((
+            // Type Index
+            be_u16,
+            // Element values
+            length_count(be_u16, named_element_value),
+        )),
+        |(type_index, values)| Annotation { type_index, values },
+    )(input)
 }
 
 #[derive(Debug)]
@@ -571,6 +567,8 @@ fn element_value(input: &[u8]) -> IResult<&[u8], ElementValue> {
         b'c' => map(be_u16, ElementValue::Class)(input),
         b'@' => element_value_annot(input),
         b'[' => element_value_array(input),
+        // TODO: Properly handle
+        _ => fail(input),
     }
 }
 
@@ -590,15 +588,11 @@ fn element_value_annot(input: &[u8]) -> IResult<&[u8], ElementValue> {
 }
 
 fn element_value_array(input: &[u8]) -> IResult<&[u8], ElementValue> {
-    let (input, length) = be_u16(input)?;
-    let (input, values) = count(element_value, length as usize)(input)?;
-    Ok((input, ElementValue::Array(values)))
+    map(length_count(be_u16, element_value), ElementValue::Array)(input)
 }
 
 fn annotations(input: &[u8]) -> IResult<&[u8], Vec<Annotation>> {
-    let (input, length) = be_u16(input)?;
-    let (input, values) = count(annotation, length as usize)(input)?;
-    Ok((input, values))
+    length_count(be_u16, annotation)(input)
 }
 
 #[derive(Debug)]
@@ -635,21 +629,11 @@ pub struct RuntimeVisibleParameterAnnotations {
 }
 
 fn runtime_visible_param_annotations(input: &[u8]) -> IResult<&[u8], Attribute<'_>> {
-    let (mut input, length) = be_u16(input)?;
-    let mut output = Vec::with_capacity(length as usize);
-
-    for _ in 0..length {
-        let (i, annotations) = annotations(input)?;
-        output.push(annotations);
-        input = i;
-    }
-
-    Ok((
-        input,
+    map(length_count(be_u16, annotations), |annotations| {
         Attribute::RuntimeVisibleParameterAnnotations(RuntimeVisibleParameterAnnotations {
-            annotations: output,
-        }),
-    ))
+            annotations,
+        })
+    })(input)
 }
 
 #[derive(Debug)]
@@ -658,21 +642,11 @@ pub struct RuntimeInvisibleParameterAnnotations {
 }
 
 fn runtime_invisible_param_annotations(input: &[u8]) -> IResult<&[u8], Attribute<'_>> {
-    let (mut input, length) = be_u16(input)?;
-    let mut output = Vec::with_capacity(length as usize);
-
-    for _ in 0..length {
-        let (i, annotations) = annotations(input)?;
-        output.push(annotations);
-        input = i;
-    }
-
-    Ok((
-        input,
+    map(length_count(be_u16, annotations), |annotations| {
         Attribute::RuntimeInvisibleParameterAnnotations(RuntimeInvisibleParameterAnnotations {
-            annotations: output,
-        }),
-    ))
+            annotations,
+        })
+    })(input)
 }
 
 #[derive(Debug)]
@@ -749,7 +723,7 @@ fn target_type(input: &[u8]) -> IResult<&[u8], TargetType> {
                 type_argument,
             }
         })(input),
-        0x4AB => map(tuple((be_u16, u8)), |(offset, type_argument)| {
+        0x4B => map(tuple((be_u16, u8)), |(offset, type_argument)| {
             TypeArgumentRef {
                 offset,
                 type_argument,
@@ -849,7 +823,7 @@ pub enum TargetType {
 }
 
 fn type_path_elements(input: &[u8]) -> IResult<&[u8], Vec<TypePathElement>> {
-    flat_map(u8, |length| count(type_path_element, length as usize))(input)
+    length_count(u8, type_path_element)(input)
 }
 
 #[derive(Debug)]
@@ -888,8 +862,7 @@ fn type_path_kind(input: &[u8]) -> IResult<&[u8], TypePathKind> {
 }
 
 fn local_variable_targets(input: &[u8]) -> IResult<&[u8], Vec<LocalVariableTarget>> {
-    let (input, length) = be_u16(input)?;
-    count(local_variable_target, length as usize)(input)
+    length_count(be_u16, local_variable_target)(input)
 }
 
 #[derive(Debug)]
@@ -915,12 +888,9 @@ pub struct RuntimeVisibleTypeAnnotations {
 }
 
 fn runtime_visible_type_annot(input: &[u8]) -> IResult<&[u8], Attribute> {
-    map(
-        flat_map(be_u16, |length| count(type_annotation, length as usize)),
-        |annotations| {
-            Attribute::RuntimeVisibleTypeAnnotations(RuntimeVisibleTypeAnnotations { annotations })
-        },
-    )(input)
+    map(length_count(be_u16, type_annotation), |annotations| {
+        Attribute::RuntimeVisibleTypeAnnotations(RuntimeVisibleTypeAnnotations { annotations })
+    })(input)
 }
 
 #[derive(Debug)]
@@ -929,14 +899,9 @@ pub struct RuntimeInvisibleTypeAnnotations {
 }
 
 fn runtime_invisible_type_annot(input: &[u8]) -> IResult<&[u8], Attribute> {
-    map(
-        flat_map(be_u16, |length| count(type_annotation, length as usize)),
-        |annotations| {
-            Attribute::RuntimeInvisibleTypeAnnotations(RuntimeInvisibleTypeAnnotations {
-                annotations,
-            })
-        },
-    )(input)
+    map(length_count(be_u16, type_annotation), |annotations| {
+        Attribute::RuntimeInvisibleTypeAnnotations(RuntimeInvisibleTypeAnnotations { annotations })
+    })(input)
 }
 
 #[derive(Debug)]
@@ -945,10 +910,9 @@ pub struct BootstrapMethods {
 }
 
 fn bootstrap_methods(input: &[u8]) -> IResult<&[u8], Attribute> {
-    map(
-        flat_map(be_u16, |length| count(bootstrap_method, length as usize)),
-        |methods| Attribute::BootstrapMethods(BootstrapMethods { methods }),
-    )(input)
+    map(length_count(be_u16, bootstrap_method), |methods| {
+        Attribute::BootstrapMethods(BootstrapMethods { methods })
+    })(input)
 }
 
 #[derive(Debug)]
@@ -959,10 +923,7 @@ pub struct BootstrapMethod {
 
 fn bootstrap_method(input: &[u8]) -> IResult<&[u8], BootstrapMethod> {
     map(
-        tuple((
-            be_u16,
-            flat_map(be_u16, |length| count(be_u16, length as usize)),
-        )),
+        tuple((be_u16, length_count(be_u16, be_u16))),
         |(method_ref, arguments)| BootstrapMethod {
             method_ref,
             arguments,
@@ -976,10 +937,9 @@ pub struct MethodParameters {
 }
 
 fn method_parameters(input: &[u8]) -> IResult<&[u8], Attribute> {
-    map(
-        flat_map(be_u16, |length| count(method_parameter, length as usize)),
-        |parameters| Attribute::MethodParameters(MethodParameters { parameters }),
-    )(input)
+    map(length_count(be_u16, method_parameter), |parameters| {
+        Attribute::MethodParameters(MethodParameters { parameters })
+    })(input)
 }
 
 #[derive(Debug)]

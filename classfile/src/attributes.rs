@@ -1,6 +1,17 @@
+use nom::{
+    bytes::complete::take,
+    combinator::{fail, map, success, value},
+    multi::count,
+    number::complete::{be_u16, be_u32, u8},
+    sequence::tuple,
+    IResult,
+};
 use strum_macros::FromRepr;
 
-use crate::parser::{constant_pool, AccessFlags};
+use crate::parser::{
+    constant_pool::{self, ConstantPool},
+    AccessFlags,
+};
 
 #[derive(Debug)]
 pub enum Attribute<'a> {
@@ -30,9 +41,31 @@ pub enum Attribute<'a> {
     Other(&'a str, &'a [u8]),
 }
 
+pub fn attributes<'a>(
+    input: &'a [u8],
+    pool: &ConstantPool<'a>,
+) -> IResult<&'a [u8], Vec<Attribute<'a>>> {
+    let name = "";
+    let b = match name {
+        "ConstantValue" => constant_value(input),
+        "Code" => code(input, pool),
+        "StackMapTable" => stack_map_table(input),
+        "Exceptions" => exceptions(input),
+        _ => fail(input),
+    };
+
+    todo!("Implement once all other attributes can be parsed")
+}
+
 #[derive(Debug)]
 pub struct ConstantValue {
     pub index: u16,
+}
+
+fn constant_value(input: &[u8]) -> IResult<&[u8], Attribute<'_>> {
+    map(be_u16, |index| {
+        Attribute::ConstantValue(ConstantValue { index })
+    })(input)
 }
 
 #[derive(Debug)]
@@ -53,9 +86,45 @@ pub struct CodeException {
     pub catch_type: constant_pool::ClassIndex,
 }
 
+fn code<'a>(input: &'a [u8], pool: &ConstantPool<'a>) -> IResult<&'a [u8], Attribute<'a>> {
+    let (input, max_stack) = be_u16(input)?;
+    let (input, max_locals) = be_u16(input)?;
+    let (input, code_length) = be_u32(input)?;
+    let (input, code) = take(code_length)(input)?;
+    let (input, exception_table_length) = be_u16(input)?;
+    let (input, exception_table) = count(code_exception, exception_table_length as usize)(input)?;
+    let (input, attributes) = attributes(input, pool)?;
+    let code = Code {
+        max_stack,
+        max_locals,
+        code,
+        exception_table,
+        attributes,
+    };
+    Ok((input, Attribute::Code(code)))
+}
+
+fn code_exception(input: &[u8]) -> IResult<&[u8], CodeException> {
+    map(
+        tuple((be_u16, be_u16, be_u16, be_u16)),
+        |(start_pc, end_pc, handler_pc, catch_type)| CodeException {
+            start_pc,
+            end_pc,
+            handler_pc,
+            catch_type,
+        },
+    )(input)
+}
+
 #[derive(Debug)]
 pub struct StackMapTable {
     pub frames: Vec<StackMapFrame>,
+}
+
+fn stack_map_table(input: &[u8]) -> IResult<&[u8], Attribute> {
+    let (input, frames_count) = be_u32(input)?;
+    let (input, frames) = count(stack_map_frame, frames_count as usize)(input)?;
+    Ok((input, Attribute::StackMapTable(StackMapTable { frames })))
 }
 
 #[derive(Debug)]
@@ -82,7 +151,92 @@ pub enum StackMapFrame {
     },
 }
 
-#[derive(Debug)]
+fn stack_map_frame(input: &[u8]) -> IResult<&[u8], StackMapFrame> {
+    let (input, ty) = u8(input)?;
+
+    match ty {
+        0..=63 => stack_map_frame_1(input, ty),
+        64..=127 => stack_map_frame_2(input, ty),
+        247 => stack_map_frame_3(input),
+        248..=250 => stack_map_frame_4(input, ty),
+        251 => stack_map_frame_5(input),
+        252..=254 => stack_map_frame_6(input, ty),
+        255 => stack_map_frame_7(input),
+        // TODO: Proper handling of remaining reserved values
+        _ => fail(input),
+    }
+}
+
+fn stack_map_frame_1(input: &[u8], ty: u8) -> IResult<&[u8], StackMapFrame> {
+    Ok((
+        input,
+        StackMapFrame::Same {
+            offset_delta: ty as u16,
+        },
+    ))
+}
+
+fn stack_map_frame_2(input: &[u8], ty: u8) -> IResult<&[u8], StackMapFrame> {
+    map(verification_type, |verify_type| StackMapFrame::Same1 {
+        offset_delta: (ty - 64) as u16,
+        stack: verify_type,
+    })(input)
+}
+
+fn stack_map_frame_3(input: &[u8]) -> IResult<&[u8], StackMapFrame> {
+    map(
+        tuple((be_u16, verification_type)),
+        |(offset_delta, verify_type)| StackMapFrame::Same1 {
+            offset_delta,
+            stack: verify_type,
+        },
+    )(input)
+}
+
+fn stack_map_frame_4(input: &[u8], ty: u8) -> IResult<&[u8], StackMapFrame> {
+    map(be_u16, |offset_delta| StackMapFrame::Chop {
+        count: 251 - ty,
+        offset_delta,
+    })(input)
+}
+
+fn stack_map_frame_5(input: &[u8]) -> IResult<&[u8], StackMapFrame> {
+    map(be_u16, |offset_delta| StackMapFrame::Same { offset_delta })(input)
+}
+
+fn stack_map_frame_6(input: &[u8], ty: u8) -> IResult<&[u8], StackMapFrame> {
+    let (input, offset_delta) = be_u16(input)?;
+    let diff = (ty - 251) as usize;
+    let (input, locals) = count(verification_type, diff)(input)?;
+
+    Ok((
+        input,
+        StackMapFrame::Append {
+            offset_delta,
+            locals,
+        },
+    ))
+}
+
+fn stack_map_frame_7(input: &[u8]) -> IResult<&[u8], StackMapFrame> {
+    let (input, offset_delta) = be_u16(input)?;
+
+    let (input, local_count) = be_u16(input)?;
+    let (input, locals) = count(verification_type, local_count as usize)(input)?;
+    let (input, stack_size) = be_u16(input)?;
+    let (input, stack) = count(verification_type, stack_size as usize)(input)?;
+
+    Ok((
+        input,
+        StackMapFrame::Full {
+            offset_delta,
+            locals,
+            stack,
+        },
+    ))
+}
+
+#[derive(Debug, Clone)]
 pub enum VerificationType {
     Top,
     Integer,
@@ -95,9 +249,36 @@ pub enum VerificationType {
     Uninitialized(u16),
 }
 
+fn verification_type(input: &[u8]) -> IResult<&[u8], VerificationType> {
+    let (input, ty) = u8(input)?;
+    Ok((
+        input,
+        (match ty {
+            0x0 => VerificationType::Top,
+            0x1 => VerificationType::Integer,
+            0x2 => VerificationType::Float,
+            0x3 => VerificationType::Double,
+            0x4 => VerificationType::Long,
+            0x5 => VerificationType::Null,
+            0x6 => VerificationType::UninitializedThis,
+            0x7 => return map(be_u16, VerificationType::Object)(input),
+            0x8 => return map(be_u16, VerificationType::Uninitialized)(input),
+            // TODO: Proper error
+            _ => return fail(input),
+        }),
+    ))
+}
+
 #[derive(Debug)]
 pub struct Exceptions {
     pub exceptions: Vec<constant_pool::ClassIndex>,
+}
+
+fn exceptions(input: &[u8]) -> IResult<&[u8], Attribute<'_>> {
+    let (input, length) = be_u16(input)?;
+    let (input, exceptions) = count(be_u16, length as usize)(input)?;
+
+    Ok((input, Attribute::Exceptions(Exceptions { exceptions })))
 }
 
 #[derive(Debug)]

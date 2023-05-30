@@ -8,10 +8,13 @@ use nom::{
 use strum_macros::FromRepr;
 use thiserror::Error;
 
-use crate::parser::{
-    access_flags,
-    constant_pool::{self, ConstantItem, ConstantPool},
-    AccessFlags,
+use crate::{
+    inst::{instruction, Instruction},
+    parser::{
+        access_flags,
+        constant_pool::{self, ConstantItem, ConstantPool},
+        AccessFlags,
+    },
 };
 
 #[derive(Debug, Error)]
@@ -131,6 +134,32 @@ pub struct Code<'a> {
     pub code: &'a [u8],
     pub exception_table: Vec<CodeException>,
     pub attributes: Attributes<'a>,
+}
+
+impl Code<'_> {
+    pub fn parse(&self) -> Result<Vec<Instruction>, nom::Err<nom::error::Error<&[u8]>>> {
+        let mut input = self.code;
+        let mut last_length = input.len();
+        let mut pos = 0;
+
+        let mut instructions = Vec::new();
+
+        while last_length > 0 {
+            let (i, instruction) = instruction(input, false, pos)?;
+
+            instructions.push(instruction);
+
+            let new_length = i.len();
+            // Change in length
+            let diff = last_length - new_length;
+
+            input = i;
+            last_length = new_length;
+            pos += diff as i32;
+        }
+
+        Ok(instructions)
+    }
 }
 
 #[derive(Debug)]

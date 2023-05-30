@@ -221,7 +221,7 @@ pub fn parse_class_file(input: &[u8]) -> IResult<&[u8], ClassFile> {
 }
 
 /// Module for parsers for the constant pool
-mod constant_pool {
+pub mod constant_pool {
     use nom::{
         bytes::streaming::take,
         combinator::{fail, map, map_res},

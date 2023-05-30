@@ -1,16 +1,16 @@
 use bitflags::bitflags;
 use nom::{
-    bytes::streaming::{tag, take},
-    combinator::{complete, map, map_res},
+    bytes::streaming::tag,
+    combinator::{map, map_res},
     multi::count,
-    number::streaming::{be_u16, be_u32},
+    number::streaming::be_u16,
     sequence::tuple,
     IResult,
 };
 use strum_macros::FromRepr;
 use thiserror::Error;
 
-use self::constant_pool::Utf8Index;
+use crate::attributes::{attributes, Attributes};
 
 #[derive(Debug)]
 pub struct ClassFile<'a> {
@@ -79,17 +79,6 @@ bitflags! {
 }
 
 #[derive(Debug)]
-pub struct Attribute<'a> {
-    pub name: Utf8Index,
-    pub info: &'a [u8],
-}
-
-#[derive(Debug)]
-pub struct Attributes<'a> {
-    pub attributes: Vec<Attribute<'a>>,
-}
-
-#[derive(Debug)]
 pub struct Field<'a> {
     pub access_flags: AccessFlags,
     pub name: constant_pool::Utf8Index,
@@ -130,94 +119,88 @@ fn access_flags(input: &[u8]) -> IResult<&[u8], AccessFlags> {
     map(be_u16, AccessFlags::from_bits_retain)(input)
 }
 
-fn attribute(input: &[u8]) -> IResult<&[u8], Attribute<'_>> {
-    let (input, name) = be_u16(input)?;
-    let (input, length) = be_u32(input)?;
-    let (input, info) = take(length)(input)?;
-    let attribute = Attribute { name, info };
-    Ok((input, attribute))
-}
-
-fn attributes(input: &[u8]) -> IResult<&[u8], Attributes<'_>> {
-    let (input, length) = be_u16(input)?;
-    let (input, attributes) = count(attribute, length as usize)(input)?;
-    Ok((input, Attributes { attributes }))
-}
-
 fn interfaces(input: &[u8]) -> IResult<&[u8], Vec<u16>> {
     let (input, interfaces_count) = be_u16(input)?;
     count(be_u16, interfaces_count as usize)(input)
 }
 
-fn fields(input: &[u8]) -> IResult<&[u8], Vec<Field<'_>>> {
-    let (input, fields_count) = be_u16(input)?;
-    count(
-        map(
-            tuple((access_flags, be_u16, be_u16, attributes)),
-            |(access_flags, name, descriptor, attributes)| Field {
-                access_flags,
-                name,
-                descriptor,
-                attributes,
-            },
-        ),
-        fields_count as usize,
-    )(input)
+fn fields<'a>(
+    input: &'a [u8],
+    pool: &constant_pool::ConstantPool<'a>,
+) -> IResult<&'a [u8], Vec<Field<'a>>> {
+    let (mut input, fields_count) = be_u16(input)?;
+
+    let mut output = Vec::with_capacity(fields_count as usize);
+
+    for _ in 0..fields_count {
+        let (i, access_flags) = access_flags(input)?;
+        let (i, name) = be_u16(i)?;
+        let (i, descriptor) = be_u16(i)?;
+        let (i, attributes) = attributes(i, pool)?;
+
+        output.push(Field {
+            access_flags,
+            name,
+            descriptor,
+            attributes,
+        });
+
+        input = i;
+    }
+
+    Ok((input, output))
 }
 
-fn methods(input: &[u8]) -> IResult<&[u8], Vec<Method<'_>>> {
-    let (input, methods_count) = be_u16(input)?;
-    count(
-        map(
-            tuple((access_flags, be_u16, be_u16, attributes)),
-            |(access_flags, name, descriptor, attributes)| Method {
-                access_flags,
-                name,
-                descriptor,
-                attributes,
-            },
-        ),
-        methods_count as usize,
-    )(input)
+fn methods<'a>(
+    input: &'a [u8],
+    pool: &constant_pool::ConstantPool<'a>,
+) -> IResult<&'a [u8], Vec<Method<'a>>> {
+    let (mut input, methods_count) = be_u16(input)?;
+
+    let mut output = Vec::with_capacity(methods_count as usize);
+
+    for _ in 0..methods_count {
+        let (i, access_flags) = access_flags(input)?;
+        let (i, name) = be_u16(i)?;
+        let (i, descriptor) = be_u16(i)?;
+        let (i, attributes) = attributes(i, pool)?;
+
+        output.push(Method {
+            access_flags,
+            name,
+            descriptor,
+            attributes,
+        });
+
+        input = i;
+    }
+
+    Ok((input, output))
 }
 
 pub fn parse_class_file(input: &[u8]) -> IResult<&[u8], ClassFile> {
-    complete(map(
-        tuple((
-            magic_bytes,
-            source_version,
-            constant_pool::take_constant_pool,
-            access_flags,
-            be_u16,
-            be_u16,
-            interfaces,
-            fields,
-            methods,
-            attributes,
-        )),
-        |(
-            _,
-            source_version,
-            constant_pool,
-            access_flags,
-            this_class,
-            super_class,
-            interfaces,
-            fields,
-            methods,
-            attributes,
-        )| ClassFile {
-            source_version,
-            constant_pool,
-            access_flags,
-            this_class,
-            super_class,
-            interfaces,
-            fields,
-            methods,
-            attributes,
-        },
-    ))(input)
+    let (input, _) = magic_bytes(input)?;
+    let (input, source_version) = source_version(input)?;
+    let (input, constant_pool) = constant_pool::constant_pool(input)?;
+    let (input, access_flags) = access_flags(input)?;
+    let (input, this_class) = be_u16(input)?;
+    let (input, super_class) = be_u16(input)?;
+    let (input, interfaces) = interfaces(input)?;
+    let (input, fields) = fields(input, &constant_pool)?;
+    let (input, methods) = methods(input, &constant_pool)?;
+    let (input, attributes) = attributes(input, &constant_pool)?;
+    let class = ClassFile {
+        source_version,
+        constant_pool,
+        access_flags,
+        this_class,
+        super_class,
+        interfaces,
+        fields,
+        methods,
+        attributes,
+    };
+    Ok((input, class))
 }
 
 /// Module for parsers for the constant pool
@@ -277,14 +260,14 @@ pub mod constant_pool {
         UnknownReferenceKind(u8),
     }
 
-    pub fn take_constant_pool(input: &[u8]) -> IResult<&[u8], ConstantPool<'_>> {
+    pub fn constant_pool(input: &[u8]) -> IResult<&[u8], ConstantPool<'_>> {
         let (input, length) = be_u16(input)?;
         let length = (length - 1) as usize;
-        let (input, table) = multi::count(take_constant_item, length)(input)?;
+        let (input, table) = multi::count(constant_item, length)(input)?;
         Ok((input, ConstantPool { table }))
     }
 
-    fn take_constant_item(input: &[u8]) -> IResult<&[u8], ConstantItem<'_>> {
+    fn constant_item(input: &[u8]) -> IResult<&[u8], ConstantItem<'_>> {
         // Constants from https://docs.oracle.com/javase/specs/jvms/se8/html/jvms-4.html#jvms-4.4-140
         // Primitives
         const UTF8: u8 = 1;
@@ -309,7 +292,7 @@ pub mod constant_pool {
         let (input, ty) = u8(input)?;
 
         match ty {
-            UTF8 => take_utf8(input),
+            UTF8 => utf8(input),
 
             INTEGER => map(be_i32, ConstantItem::Integer)(input),
             LONG => map(be_i64, ConstantItem::Long)(input),
@@ -317,37 +300,37 @@ pub mod constant_pool {
             FLOAT => map(be_f32, ConstantItem::Float)(input),
             DOUBLE => map(be_f64, ConstantItem::Double)(input),
 
-            CLASS => take_class_info(input),
+            CLASS => class_info(input),
             STRING => map(be_u16, ConstantItem::String)(input),
 
-            FIELDREF => map(take_class_item, ConstantItem::Fieldref)(input),
-            METHODREF => map(take_class_item, ConstantItem::Methodref)(input),
-            INTERFACE_METHODREF => map(take_class_item, ConstantItem::InterfaceMethodref)(input),
+            FIELDREF => map(class_item, ConstantItem::Fieldref)(input),
+            METHODREF => map(class_item, ConstantItem::Methodref)(input),
+            INTERFACE_METHODREF => map(class_item, ConstantItem::InterfaceMethodref)(input),
 
-            NAME_AND_TYPE => take_name_and_type(input),
+            NAME_AND_TYPE => name_and_type(input),
 
-            METHOD_HANDLE => take_method_handle(input),
+            METHOD_HANDLE => method_handle(input),
             METHOD_TYPE => take_method_type(input),
 
-            INVOKE_DYNAMIC => take_invoke_dynamic(input),
+            INVOKE_DYNAMIC => invoke_dynamic(input),
 
             // TODO: Proper error
             _ => fail(input),
         }
     }
 
-    fn take_utf8(input: &[u8]) -> IResult<&[u8], ConstantItem<'_>> {
+    fn utf8(input: &[u8]) -> IResult<&[u8], ConstantItem<'_>> {
         let (input, length) = be_u16(input)?;
         map_res(take(length), |bytes| {
             std::str::from_utf8(bytes).map(ConstantItem::Utf8)
         })(input)
     }
 
-    fn take_class_info(input: &[u8]) -> IResult<&[u8], ConstantItem<'_>> {
+    fn class_info(input: &[u8]) -> IResult<&[u8], ConstantItem<'_>> {
         map(be_u16, |name| ConstantItem::Class(ClassInfo { name }))(input)
     }
 
-    fn take_class_item(input: &[u8]) -> IResult<&[u8], ClassItem> {
+    fn class_item(input: &[u8]) -> IResult<&[u8], ClassItem> {
         map(tuple((be_u16, be_u16)), |(class, name_and_type)| {
             ClassItem {
                 class,
@@ -356,19 +339,19 @@ pub mod constant_pool {
         })(input)
     }
 
-    fn take_name_and_type(input: &[u8]) -> IResult<&[u8], ConstantItem<'_>> {
+    fn name_and_type(input: &[u8]) -> IResult<&[u8], ConstantItem<'_>> {
         map(tuple((be_u16, be_u16)), |(name, descriptor)| {
             ConstantItem::NameAndType(NameAndType { name, descriptor })
         })(input)
     }
 
-    fn take_method_type(input: &[u8]) -> IResult<&[u8], ConstantItem<'_>> {
+    fn method_type(input: &[u8]) -> IResult<&[u8], ConstantItem<'_>> {
         map(be_u16, |descriptor| {
             ConstantItem::MethodType(MethodType { descriptor })
         })(input)
     }
 
-    fn take_method_handle(input: &[u8]) -> IResult<&[u8], ConstantItem<'_>> {
+    fn method_handle(input: &[u8]) -> IResult<&[u8], ConstantItem<'_>> {
         map_res(
             tuple((be_u8, be_u16)),
             |(reference_kind, reference_index)| {
@@ -384,7 +367,7 @@ pub mod constant_pool {
         )(input)
     }
 
-    fn take_invoke_dynamic(input: &[u8]) -> IResult<&[u8], ConstantItem<'_>> {
+    fn invoke_dynamic(input: &[u8]) -> IResult<&[u8], ConstantItem<'_>> {
         map(
             tuple((be_u16, be_u16)),
             |(bootstrap_method_attr_index, name_and_type)| {
@@ -451,19 +434,19 @@ mod test {
     use super::{magic_bytes, parse_class_file, source_version, MajorVersion};
 
     #[test]
-    fn test_take_magic_bytes() {
+    fn test_magic_bytes() {
         let bytes = [0xCA, 0xFE, 0xBA, 0xBE];
         magic_bytes(&bytes).unwrap();
     }
 
     #[test]
-    fn test_take_invalid_magic_bytes() {
+    fn test_invalid_magic_bytes() {
         let bytes = [0, 0, 0xBA, 0];
         magic_bytes(&bytes).unwrap_err();
     }
 
     #[test]
-    fn test_take_source_version() {
+    fn test_source_version() {
         // Minor: 1, Major: Java 8,
         let bytes = [0, 1, 0, 52];
         let (_, version) = source_version(&bytes).unwrap();
@@ -472,7 +455,7 @@ mod test {
     }
 
     #[test]
-    fn test_take_unknown_source_version() {
+    fn test_unknown_source_version() {
         // Minor: 1, Major: Unknown,
         let bytes = [0, 1, 0, 255];
 
@@ -480,7 +463,7 @@ mod test {
     }
 
     #[test]
-    fn test_take_class_file() {
+    fn test_class_file() {
         let example = include_bytes!("../tests/Example.class");
         let (_, class_file) = parse_class_file(example).unwrap();
 

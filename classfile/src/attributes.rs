@@ -1,6 +1,6 @@
 use nom::{
     bytes::complete::take,
-    combinator::{fail, map, success, value},
+    combinator::{fail, map, rest},
     multi::count,
     number::complete::{be_u16, be_u32, u8},
     sequence::tuple,
@@ -31,6 +31,7 @@ pub enum Attribute<'a> {
     Deprecated,
     RuntimeVisibleAnnotations(RuntimeVisibleAnnotations),
     RuntimeInvisibleAnnotations(RuntimeInvisibleAnnotations),
+    // TODO:
     RuntimeVisibleParameterAnnotations(RuntimeVisibleParameterAnnotations),
     RuntimeInvisibleParameterAnnotations(RuntimeInvisibleParameterAnnotations),
     RuntimeVisibleTypeAnnotations(RuntimeVisibleTypeAnnotations),
@@ -41,20 +42,54 @@ pub enum Attribute<'a> {
     Other(&'a str, &'a [u8]),
 }
 
-pub fn attributes<'a>(
-    input: &'a [u8],
-    pool: &ConstantPool<'a>,
-) -> IResult<&'a [u8], Vec<Attribute<'a>>> {
-    let name = "";
-    let b = match name {
-        "ConstantValue" => constant_value(input),
-        "Code" => code(input, pool),
-        "StackMapTable" => stack_map_table(input),
-        "Exceptions" => exceptions(input),
-        _ => fail(input),
-    };
+#[derive(Debug)]
+pub struct Attributes<'a> {
+    pub attributes: Vec<Attribute<'a>>,
+}
 
-    todo!("Implement once all other attributes can be parsed")
+pub fn attributes<'a>(input: &[u8], pool: &ConstantPool<'a>) -> IResult<&'a [u8], Attributes<'a>> {
+    let (mut input, length) = be_u16(input)?;
+
+    let mut attributes = Vec::with_capacity(length as usize);
+    for _ in 0..length {
+        let (i, attribute) = attribute(input, pool)?;
+        attributes.push(attribute);
+        input = i;
+    }
+
+    Ok((input, Attributes { attributes }))
+}
+
+pub fn attribute<'a>(input: &'a [u8], pool: &ConstantPool<'a>) -> IResult<&'a [u8], Attribute<'a>> {
+    let (input, name) = be_u16(input)?;
+    let (input, length) = be_u32(input)?;
+    let (input, info) = take(length)(input)?;
+
+    let name = "";
+
+    let (_left, attribute) = match name {
+        "ConstantValue" => constant_value(info),
+        "Code" => code(info, pool),
+        "StackMapTable" => stack_map_table(info),
+        "Exceptions" => exceptions(info),
+        "InnerClasses" => inner_classes(info),
+        "EnclosingMethod" => enclosing_method(info),
+        "Synthetic" => return Ok((input, Attribute::Synthetic)),
+        "Signature" => signature(info),
+        "SourceFile" => source_file(info),
+        "SourceDebugExtension" => source_debug_ext(info),
+        "LineNumberTable" => line_number_table(info),
+        "LocalVariableTable" => local_variable_table(info),
+        "LocalVariableTypeTable" => local_variable_type_table(info),
+        "Deprecated" => return Ok((input, Attribute::Deprecated)),
+        "RuntimeVisibleAnnotations" => runtime_visible_annotations(info),
+        "RuntimeInvisibleAnnotations" => runtime_visible_annotations(info),
+        _ => return Ok((input, Attribute::Other(name, info))),
+    }?;
+
+    // TODO: Ensure _left has nothing left in it
+
+    Ok((input, attribute))
 }
 
 #[derive(Debug)]
@@ -69,13 +104,12 @@ fn constant_value(input: &[u8]) -> IResult<&[u8], Attribute<'_>> {
 }
 
 #[derive(Debug)]
-
 pub struct Code<'a> {
     pub max_stack: u16,
     pub max_locals: u16,
     pub code: &'a [u8],
     pub exception_table: Vec<CodeException>,
-    pub attributes: Vec<Attribute<'a>>,
+    pub attributes: Attributes<'a>,
 }
 
 #[derive(Debug)]
@@ -286,6 +320,12 @@ pub struct InnerClasses {
     pub classes: Vec<InnerClass>,
 }
 
+fn inner_classes(input: &[u8]) -> IResult<&[u8], Attribute> {
+    let (input, number_of_classes) = be_u16(input)?;
+    let (input, classes) = count(inner_class, number_of_classes as usize)(input)?;
+    Ok((input, Attribute::InnerClasses(InnerClasses { classes })))
+}
+
 #[derive(Debug)]
 pub struct InnerClass {
     pub inner_class: constant_pool::ClassIndex,
@@ -294,10 +334,28 @@ pub struct InnerClass {
     pub inner_class_access_flags: AccessFlags,
 }
 
+fn inner_class(input: &[u8]) -> IResult<&[u8], InnerClass> {
+    map(
+        tuple((be_u16, be_u16, be_u16, be_u16)),
+        |(inner_class, outer_class, inner_name, inner_class_access_flags)| InnerClass {
+            inner_class,
+            outer_class,
+            inner_name,
+            inner_class_access_flags: AccessFlags::from_bits_retain(inner_class_access_flags),
+        },
+    )(input)
+}
+
 #[derive(Debug)]
 pub struct EnclosingMethod {
     pub class: constant_pool::ClassIndex,
     pub method: constant_pool::NameAndTypeIndex,
+}
+
+fn enclosing_method(input: &[u8]) -> IResult<&[u8], Attribute<'_>> {
+    map(tuple((be_u16, be_u16)), |(class, method)| {
+        Attribute::EnclosingMethod(EnclosingMethod { class, method })
+    })(input)
 }
 
 #[derive(Debug)]
@@ -305,9 +363,21 @@ pub struct Signature {
     pub signature: constant_pool::Utf8Index,
 }
 
+fn signature(input: &[u8]) -> IResult<&[u8], Attribute> {
+    map(be_u16, |signature| {
+        Attribute::Signature(Signature { signature })
+    })(input)
+}
+
 #[derive(Debug)]
 pub struct SourceFile {
     pub source_file: constant_pool::Utf8Index,
+}
+
+fn source_file(input: &[u8]) -> IResult<&[u8], Attribute> {
+    map(be_u16, |source_file| {
+        Attribute::SourceFile(SourceFile { source_file })
+    })(input)
 }
 
 #[derive(Debug)]
@@ -315,9 +385,26 @@ pub struct SourceDebugExtension<'a> {
     pub debug_extension: &'a [u8],
 }
 
+fn source_debug_ext(input: &[u8]) -> IResult<&[u8], Attribute> {
+    map(rest, |debug_extension| {
+        Attribute::SourceDebugExtension(SourceDebugExtension {
+            debug_extension: input,
+        })
+    })(input)
+}
+
 #[derive(Debug)]
 pub struct LineNumberTable {
-    pub entires: Vec<LineNumber>,
+    pub entries: Vec<LineNumber>,
+}
+
+fn line_number_table(input: &[u8]) -> IResult<&[u8], Attribute> {
+    let (input, table_length) = be_u16(input)?;
+    let (input, entries) = count(line_number, table_length as usize)(input)?;
+    Ok((
+        input,
+        Attribute::LineNumberTable(LineNumberTable { entries }),
+    ))
 }
 
 #[derive(Debug)]
@@ -326,9 +413,27 @@ pub struct LineNumber {
     pub line_number: u16,
 }
 
+fn line_number(input: &[u8]) -> IResult<&[u8], LineNumber> {
+    map(tuple((be_u16, be_u16)), |(start_pc, line_number)| {
+        LineNumber {
+            start_pc,
+            line_number,
+        }
+    })(input)
+}
+
 #[derive(Debug)]
 pub struct LocalVariableTable {
-    pub entires: Vec<LocalVariable>,
+    pub entries: Vec<LocalVariable>,
+}
+
+fn local_variable_table(input: &[u8]) -> IResult<&[u8], Attribute> {
+    let (input, table_length) = be_u16(input)?;
+    let (input, entries) = count(local_variable, table_length as usize)(input)?;
+    Ok((
+        input,
+        Attribute::LocalVariableTable(LocalVariableTable { entries }),
+    ))
 }
 
 #[derive(Debug)]
@@ -340,30 +445,78 @@ pub struct LocalVariable {
     pub index: u16,
 }
 
+fn local_variable(input: &[u8]) -> IResult<&[u8], LocalVariable> {
+    map(
+        tuple((be_u16, be_u16, be_u16, be_u16, be_u16)),
+        |(start_pc, length, name, descriptor, index)| LocalVariable {
+            start_pc,
+            length,
+            name,
+            descriptor,
+            index,
+        },
+    )(input)
+}
+
 #[derive(Debug)]
 pub struct LocalVariableTypeTable {
-    pub entires: Vec<LocalVariableType>,
+    pub entries: Vec<LocalVariableType>,
+}
+
+fn local_variable_type_table(input: &[u8]) -> IResult<&[u8], Attribute> {
+    let (input, table_length) = be_u16(input)?;
+    let (input, entries) = count(local_variable_type, table_length as usize)(input)?;
+    Ok((
+        input,
+        Attribute::LocalVariableTypeTable(LocalVariableTypeTable { entries }),
+    ))
 }
 
 #[derive(Debug)]
 pub struct LocalVariableType {
     pub start_pc: u16,
     pub length: u16,
-    pub name_index: constant_pool::Utf8Index,
-    pub signature_index: constant_pool::Utf8Index,
+    pub name: constant_pool::Utf8Index,
+    pub signature: constant_pool::Utf8Index,
     pub index: u16,
+}
+
+fn local_variable_type(input: &[u8]) -> IResult<&[u8], LocalVariableType> {
+    map(
+        tuple((be_u16, be_u16, be_u16, be_u16, be_u16)),
+        |(start_pc, length, name, signature, index)| LocalVariableType {
+            start_pc,
+            length,
+            name,
+            signature,
+            index,
+        },
+    )(input)
 }
 
 #[derive(Debug)]
 pub struct Annotation {
     pub type_index: constant_pool::Utf8Index,
-    pub pairs: AnnotationPair,
+    pub values: Vec<NamedElementValue>,
+}
+
+fn annotation(input: &[u8]) -> IResult<&[u8], Annotation> {
+    let (input, type_index) = be_u16(input)?;
+    let (input, pairs_length) = be_u16(input)?;
+    let (input, values) = count(named_element_value, pairs_length as usize)(input)?;
+    Ok((input, Annotation { type_index, values }))
 }
 
 #[derive(Debug)]
-pub struct AnnotationPair {
+pub struct NamedElementValue {
     pub name: constant_pool::Utf8Index,
     pub value: ElementValue,
+}
+
+fn named_element_value(input: &[u8]) -> IResult<&[u8], NamedElementValue> {
+    map(tuple((be_u16, element_value)), |(name, value)| {
+        NamedElementValue { name, value }
+    })(input)
 }
 
 #[derive(Debug)]
@@ -383,6 +536,53 @@ pub enum ElementValue {
     Array(Vec<ElementValue>),
 }
 
+fn element_value(input: &[u8]) -> IResult<&[u8], ElementValue> {
+    let (input, tag) = u8(input)?;
+
+    match tag {
+        b'B' => map(be_u16, ElementValue::Byte)(input),
+        b'C' => map(be_u16, ElementValue::Char)(input),
+        b'D' => map(be_u16, ElementValue::Double)(input),
+        b'F' => map(be_u16, ElementValue::Float)(input),
+        b'I' => map(be_u16, ElementValue::Int)(input),
+        b'J' => map(be_u16, ElementValue::Long)(input),
+        b'S' => map(be_u16, ElementValue::Short)(input),
+        b'Z' => map(be_u16, ElementValue::Boolean)(input),
+        b's' => map(be_u16, ElementValue::String)(input),
+        b'e' => element_value_enum(input),
+        b'c' => map(be_u16, ElementValue::Class)(input),
+        b'@' => element_value_annot(input),
+        b'[' => element_value_array(input),
+    }
+}
+
+fn element_value_enum(input: &[u8]) -> IResult<&[u8], ElementValue> {
+    map(tuple((be_u16, be_u16)), |(type_name, name_index)| {
+        ElementValue::Enum(EnumElement {
+            type_name,
+            name_index,
+        })
+    })(input)
+}
+
+fn element_value_annot(input: &[u8]) -> IResult<&[u8], ElementValue> {
+    map(annotation, |annotation| {
+        ElementValue::Annotation(Box::new(annotation))
+    })(input)
+}
+
+fn element_value_array(input: &[u8]) -> IResult<&[u8], ElementValue> {
+    let (input, length) = be_u16(input)?;
+    let (input, values) = count(element_value, length as usize)(input)?;
+    Ok((input, ElementValue::Array(values)))
+}
+
+fn annotations(input: &[u8]) -> IResult<&[u8], Vec<Annotation>> {
+    let (input, length) = be_u16(input)?;
+    let (input, values) = count(annotation, length as usize)(input)?;
+    Ok((input, values))
+}
+
 #[derive(Debug)]
 pub struct EnumElement {
     pub type_name: constant_pool::Utf8Index,
@@ -394,9 +594,21 @@ pub struct RuntimeVisibleAnnotations {
     pub annotations: Vec<Annotation>,
 }
 
+fn runtime_visible_annotations(input: &[u8]) -> IResult<&[u8], Attribute<'_>> {
+    map(annotations, |annotations| {
+        Attribute::RuntimeVisibleAnnotations(RuntimeVisibleAnnotations { annotations })
+    })(input)
+}
+
 #[derive(Debug)]
 pub struct RuntimeInvisibleAnnotations {
     pub annotations: Vec<Annotation>,
+}
+
+fn runtime_invisible_annotations(input: &[u8]) -> IResult<&[u8], Attribute<'_>> {
+    map(annotations, |annotations| {
+        Attribute::RuntimeVisibleAnnotations(RuntimeVisibleAnnotations { annotations })
+    })(input)
 }
 
 #[derive(Debug)]

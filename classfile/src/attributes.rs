@@ -9,12 +9,9 @@ use strum_macros::FromRepr;
 use thiserror::Error;
 
 use crate::{
+    class::{access_flags, AccessFlags},
+    constant_pool::{self, ConstantItem, ConstantPool},
     inst::{instruction, Instruction},
-    parser::{
-        access_flags,
-        constant_pool::{self, ConstantItem, ConstantPool},
-        AccessFlags,
-    },
 };
 
 #[derive(Debug, Error)]

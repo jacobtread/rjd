@@ -7,7 +7,7 @@ use nom::{
     IResult,
 };
 
-use crate::parser::constant_pool::PoolIndex;
+use crate::constant_pool::PoolIndex;
 
 pub type Index = u16;
 pub type BranchIndex = u16;

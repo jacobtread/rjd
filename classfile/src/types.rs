@@ -11,6 +11,7 @@ use std::fmt::Display;
 
 /// Parsed class type includes the package parts,
 /// class name and outer class names
+#[derive(Debug)]
 pub struct Class<'a> {
     pub class: &'a str,
     pub packages: Vec<&'a str>,
@@ -18,7 +19,7 @@ pub struct Class<'a> {
 }
 
 impl<'a> Class<'a> {
-    fn try_parse(s: &'a str) -> Option<Class<'a>> {
+    pub fn try_parse(s: &'a str) -> Option<Class<'a>> {
         let mut packages: Vec<&str> = s.split('/').collect();
         let class = packages.pop()?;
 
@@ -46,26 +47,26 @@ impl<'a> Class<'a> {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub enum FieldDesc {
+pub enum FieldDesc<'a> {
     Byte,
     Char,
     Double,
     Float,
     Int,
     Long,
-    Object(String),
+    Object(&'a str),
     Short,
     Boolean,
     Array {
         /// The number of dimensions of the array
         dim: u8,
         /// The actual array type value
-        ty: Box<FieldDesc>,
+        ty: Box<FieldDesc<'a>>,
     },
     Void,
 }
 
-impl Display for FieldDesc {
+impl Display for FieldDesc<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
             Self::Byte => "byte",
@@ -95,13 +96,13 @@ impl Display for FieldDesc {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub struct MethodDescriptor {
-    pub parameters: Vec<FieldDesc>,
+pub struct MethodDescriptor<'a> {
+    pub parameters: Vec<FieldDesc<'a>>,
     /// Method return type (None indicating the void return type)
-    pub return_type: FieldDesc,
+    pub return_type: FieldDesc<'a>,
 }
 
-pub fn descriptor(input: &str) -> IResult<&str, FieldDesc> {
+pub fn field_descriptor(input: &str) -> IResult<&str, FieldDesc> {
     alt((primitive, object, array))(input)
 }
 
@@ -121,18 +122,19 @@ fn primitive(input: &str) -> IResult<&str, FieldDesc> {
 }
 
 fn array(input: &str) -> IResult<&str, FieldDesc> {
-    map(tuple((many1_count(char('[')), descriptor)), |(dim, ty)| {
-        FieldDesc::Array {
+    map(
+        tuple((many1_count(char('[')), field_descriptor)),
+        |(dim, ty)| FieldDesc::Array {
             dim: dim as u8,
             ty: Box::new(ty),
-        }
-    })(input)
+        },
+    )(input)
 }
 
 fn object(input: &str) -> IResult<&str, FieldDesc> {
     map(
         delimited(char('L'), take_until1(";"), char(';')),
-        |object: &str| FieldDesc::Object(object.to_string()),
+        |object: &str| FieldDesc::Object(object),
     )(input)
 }
 
@@ -140,9 +142,9 @@ pub fn method_descriptor(input: &str) -> IResult<&str, MethodDescriptor> {
     map(
         tuple((
             // Function Body: Open -> Descriptor* -> Close
-            delimited(char('('), many0(descriptor), char(')')),
+            delimited(char('('), many0(field_descriptor), char(')')),
             // Return type: Descriptor
-            descriptor,
+            field_descriptor,
         )),
         |(parameters, return_type)| MethodDescriptor {
             parameters,
@@ -154,19 +156,19 @@ pub fn method_descriptor(input: &str) -> IResult<&str, MethodDescriptor> {
 #[cfg(test)]
 mod test {
 
-    use crate::types::{descriptor, method_descriptor, MethodDescriptor};
+    use crate::types::{field_descriptor, method_descriptor, MethodDescriptor};
 
     use super::FieldDesc;
 
     #[test]
     fn test_field_desc_array() {
         let value = "[[Lme/jacobtread/System;";
-        let (_, desc) = descriptor(value).unwrap();
+        let (_, desc) = field_descriptor(value).unwrap();
         assert_eq!(
             desc,
             FieldDesc::Array {
                 dim: 2,
-                ty: Box::new(FieldDesc::Object("me/jacobtread/System".to_string()))
+                ty: Box::new(FieldDesc::Object("me/jacobtread/System"))
             }
         );
     }
@@ -174,8 +176,8 @@ mod test {
     #[test]
     fn test_field_desc_object() {
         let value = "Lme/jacobtread/System;";
-        let (_, desc) = descriptor(value).unwrap();
-        assert_eq!(desc, FieldDesc::Object("me/jacobtread/System".to_string()));
+        let (_, desc) = field_descriptor(value).unwrap();
+        assert_eq!(desc, FieldDesc::Object("me/jacobtread/System"));
     }
 
     #[test]
@@ -187,7 +189,7 @@ mod test {
             desc,
             MethodDescriptor {
                 parameters: vec![
-                    FieldDesc::Object("me/jacobtread/System".to_string()),
+                    FieldDesc::Object("me/jacobtread/System"),
                     FieldDesc::Array {
                         dim: 1,
                         ty: Box::new(FieldDesc::Int)

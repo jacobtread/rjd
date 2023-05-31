@@ -83,8 +83,8 @@ fn method_flags_fmt(flags: &AccessFlags, f: &mut std::fmt::Formatter<'_>) -> std
         spaced = false;
     }
 
-    if flags.contains(AccessFlags::VOLATILE) {
-        f.write_str("volatile ")?;
+    if flags.contains(AccessFlags::SYNCHRONIZED) {
+        f.write_str("syncronized ")?;
         spaced = true;
     }
 
@@ -138,6 +138,21 @@ impl Display for JavaClassRenderer<'_> {
         }
         f.write_char('\n')?;
 
+        if !class.methods.is_empty() {
+            for method in &class.methods {
+                f.write_str("  ")?;
+                method_flags_fmt(&method.access_flags, f)?;
+                write!(
+                    f,
+                    "{} {} () {{}}",
+                    &method.descriptor.return_type, &method.name
+                )?;
+                f.write_char('\n')?;
+            }
+
+            f.write_char('\n')?;
+        }
+
         f.write_str("}")?;
 
         Ok(())
@@ -156,7 +171,7 @@ mod test {
     fn test_render_class() {
         let file = read("tests/ExampleStringLoop.class").unwrap();
         let (_, class_file) = parse_class_file(&file).unwrap();
-    
+
         let render = JavaClassRenderer { class: class_file };
         println!("{}", render)
     }

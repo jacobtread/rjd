@@ -3,6 +3,9 @@ name = "rjd"
 version = "0.1.0"
 edition = "2021"
 
+[workspace]
+members = [".", "classfile"]
+
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
@@ -10,3 +13,4 @@ bitflags = "2"
 thiserror = "1"
 strum = "0.24"
 strum_macros = "0.24"
+classfile = { path = "./classfile", version = "*" }

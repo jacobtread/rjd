@@ -77,7 +77,7 @@ pub fn attribute<'b, 'a: 'b>(
 
         let (_left, attribute) = match name {
             "ConstantValue" => constant_value(info),
-            "Code" => code(pool)(info),
+            "Code" => code(pool, info),
             "StackMapTable" => stack_map_table(info),
             "Exceptions" => exceptions(info),
             "InnerClasses" => inner_classes(info),
@@ -164,27 +164,26 @@ pub struct CodeException {
 
 pub fn code<'b, 'a: 'b>(
     pool: &'b ConstantPool<'a>,
-) -> impl FnMut(&'a [u8]) -> IResult<&'a [u8], Attribute> + 'b {
-    move |input| {
-        map(
-            tuple((
-                be_u16,
-                be_u16,
-                map_parser(length_data(be_u32), code_bytes),
-                length_count(be_u16, code_exception),
-                attributes(pool),
-            )),
-            |(max_stack, max_locals, code, exception_table, attributes)| {
-                Attribute::Code(Code {
-                    max_stack,
-                    max_locals,
-                    code,
-                    exception_table,
-                    attributes,
-                })
-            },
-        )(input)
-    }
+    input: &'a [u8],
+) -> IResult<&'a [u8], Attribute> {
+    map(
+        tuple((
+            be_u16,
+            be_u16,
+            map_parser(length_data(be_u32), code_bytes),
+            length_count(be_u16, code_exception),
+            attributes(pool),
+        )),
+        |(max_stack, max_locals, code, exception_table, attributes)| {
+            Attribute::Code(Code {
+                max_stack,
+                max_locals,
+                code,
+                exception_table,
+                attributes,
+            })
+        },
+    )(input)
 }
 
 fn code_exception(input: &[u8]) -> IResult<&[u8], CodeException> {
@@ -205,7 +204,7 @@ pub struct StackMapTable {
 }
 
 fn stack_map_table(input: &[u8]) -> IResult<&[u8], Attribute> {
-    map(length_count(be_u32, stack_map_frame), |frames| {
+    map(length_count(be_u16, stack_map_frame), |frames| {
         Attribute::StackMapTable(StackMapTable { frames })
     })(input)
 }

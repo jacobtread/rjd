@@ -167,6 +167,7 @@ pub fn parse_class_file(input: &[u8]) -> IResult<&[u8], ClassFile> {
     let (input, fields) = fields(&constant_pool, input)?;
     let (input, methods) = methods(&constant_pool, input)?;
     let (input, attributes) = attributes(&constant_pool)(input)?;
+
     let class = ClassFile {
         source_version,
         constant_pool,

@@ -93,30 +93,66 @@ pub fn create_blocks(input: &InstructionSet) -> HashMap<usize, Block> {
 /// onto the stack
 #[derive(Debug, Clone)]
 pub enum StackItem<'a> {
+    /// Represents an actual value
     Value(Value<'a>),
-    Casted(Casted<'a>),
-    Operation(Operation<'a>),
+    /// Represents a cast of a value to a type
+    Casted {
+        /// The value being cast
+        value: Box<StackItem<'a>>,
+        /// The type that it was cast to
+        cast_to: FieldDesc<'a>,
+    },
+    /// Represents an operation between two stack items
+    Operation {
+        /// The left hand side of the operation
+        left: Box<StackItem<'a>>,
+        /// The type of operation
+        ty: OperationType,
+        /// The right hand side of the operation
+        right: Box<StackItem<'a>>,
+    },
     Call(Call<'a>),
     CallStatic(CallStatic<'a>),
-    LocalVariable(LocalVariable),
-    GetField(GetField<'a>),
-    GetFieldStatic(GetFieldStatic<'a>),
-    ArrayLength(ArrayLength<'a>),
-    ArrayLoad(ArrayLoad<'a>),
-    Negated(Box<StackItem<'a>>),
+    /// Represents getting a local variable on the stack
+    GetLocal {
+        /// The index of the local variable
+        index: u16,
+        /// The type of the local variable
+        ty: LocalVariableType,
+    },
+    /// Represents getting a field value from an object
+    GetField {
+        /// The reference to the field
+        field: Fieldref<'a>,
+        /// Reference to the object the field is on
+        reference: Box<StackItem<'a>>,
+    },
+    /// Represents getting a static field value
+    GetFieldStatic {
+        /// The reference to the field
+        field: Fieldref<'a>,
+    },
+    /// Represents access of the .length field on an array
+    ArrayLength {
+        /// Reference to the array
+        reference: Box<StackItem<'a>>,
+    },
+    /// Represents loading a value from an array
+    ArrayLoad {
+        /// Reference to the array
+        reference: Box<StackItem<'a>>,
+        /// Index within the array
+        index: Box<StackItem<'a>>,
+    },
+    /// Represents a negated value
+    Negated {
+        /// The value being negated
+        value: Box<StackItem<'a>>,
+    },
 
     /// TODO: Expand JSR and Ret before this step
     Jsr(u16),
     Ret(u16),
-}
-
-/// Represents one type being cast to another
-#[derive(Debug, Clone)]
-pub struct Casted<'a> {
-    /// The value being cast
-    pub value: Box<StackItem<'a>>,
-    /// The type that it was cast to
-    pub cast_to: FieldDesc<'a>,
 }
 
 /// Represents a literal/constant/reference on the stack
@@ -165,17 +201,6 @@ pub enum ArrayRef<'a> {
     },
 }
 
-/// Represents an operation between two stack items
-#[derive(Debug, Clone)]
-pub struct Operation<'a> {
-    /// The left hand side of the operation
-    pub left: Box<StackItem<'a>>,
-    /// The type of operation
-    pub ty: OperationType,
-    /// The right hand side of the operation
-    pub right: Box<StackItem<'a>>,
-}
-
 /// Different operation types
 #[derive(Debug, Clone)]
 pub enum OperationType {
@@ -216,15 +241,6 @@ pub struct CallStatic<'a> {
     pub args: Vec<StackItem<'a>>,
 }
 
-/// Represents a local variable on the stack
-#[derive(Debug, Clone)]
-pub struct LocalVariable {
-    /// The index of the local variable
-    pub index: u16,
-    /// The type of the local variable
-    pub ty: LocalVariableType,
-}
-
 /// Different value types for a local variabel
 #[derive(Debug, Clone)]
 pub enum LocalVariableType {
@@ -233,38 +249,6 @@ pub enum LocalVariableType {
     Float,
     Double,
     Reference,
-}
-
-/// Represents getting a field value from an object
-#[derive(Debug, Clone)]
-pub struct GetField<'a> {
-    /// The reference to the field
-    pub field: Fieldref<'a>,
-    /// Reference to the object the field is on
-    pub reference: Box<StackItem<'a>>,
-}
-
-/// Represents getting a static field value
-#[derive(Debug, Clone)]
-pub struct GetFieldStatic<'a> {
-    /// The reference to the field
-    pub field: Fieldref<'a>,
-}
-
-/// Represents access of the .length field on an array
-#[derive(Debug, Clone)]
-pub struct ArrayLength<'a> {
-    /// Reference to the array
-    pub reference: Box<StackItem<'a>>,
-}
-
-/// Represents loading a value from an array
-#[derive(Debug, Clone)]
-pub struct ArrayLoad<'a> {
-    /// Reference to the array
-    pub reference: Box<StackItem<'a>>,
-    /// Index within the array
-    pub index: Box<StackItem<'a>>,
 }
 
 /// Represents the operand stack
@@ -297,6 +281,10 @@ type StackResult<T> = Result<T, StackError>;
 impl<'a> Stack<'a> {
     fn push(&mut self, value: StackItem<'a>) {
         self.inner.push(value);
+    }
+
+    fn push_value(&mut self, value: Value<'a>) {
+        self.inner.push(StackItem::Value(value));
     }
 
     fn pop(&mut self) -> StackResult<StackItem<'a>> {
@@ -414,30 +402,74 @@ impl<'a> Stack<'a> {
 pub enum AST<'a> {
     Call(Call<'a>),
     CallStatic(CallStatic<'a>),
-    Return(Option<StackItem<'a>>),
-    Condition(Condition<'a>),
-    ArrayStore(ArrayStore<'a>),
-    PutField(PutField<'a>),
-    PutFieldStatic(PutFieldStatic<'a>),
-    SetLocal(SetLocal<'a>),
-    LocalIncrement(LocalIncrement),
+    Return {
+        /// Value returned (None if void)
+        value: Option<StackItem<'a>>,
+    },
+    /// Conditional statement with a jump to another block
+    Condition {
+        /// Left hand side of the condition
+        left: StackItem<'a>,
+        /// Right hand side of the condition
+        right: StackItem<'a>,
+        /// The actual condition
+        ty: ConditionType,
+        /// The position to jump to
+        jump_index: u16,
+    },
+    /// Represents storing something in an array
+    ArrayStore {
+        /// The reference for the array
+        reference: StackItem<'a>,
+        /// The stack item representing the index within the array
+        index: StackItem<'a>,
+        /// The value to store at the index
+        value: StackItem<'a>,
+    },
+    /// Represents storing something into a field
+    PutField {
+        /// The field details
+        field: Fieldref<'a>,
+        /// The reference to the object the field is on
+        reference: StackItem<'a>,
+        /// The value to assign the field
+        value: StackItem<'a>,
+    },
+    /// Represents storing something into a static field
+    PutFieldStatic {
+        /// The field details
+        field: Fieldref<'a>,
+        /// The value to assign the field
+        value: StackItem<'a>,
+    },
+    /// Represents setting a local variable
+    SetLocal {
+        /// The index of the local variable
+        index: u16,
+        /// The value to store in the local variable
+        value: StackItem<'a>,
+    },
+    /// Represents an int increment on a local variable
+    LocalIncrement {
+        /// The index of the local variable
+        index: u16,
+        /// The amount to increment by
+        value: u16,
+    },
     InvokeDynamic(InvokeDynamic),
-    Throw(StackItem<'a>),
-    LookupSwitch(LookupSwitchImpl<'a>),
-    TableSwitch(TableSwitchImpl<'a>),
-}
-
-/// Conditional statement with a jump to another block
-#[derive(Debug)]
-pub struct Condition<'a> {
-    /// Left hand side of the condition
-    pub left: StackItem<'a>,
-    /// Right hand side of the condition
-    pub right: StackItem<'a>,
-    /// The actual condition
-    pub ty: ConditionType,
-    /// The position to jump to
-    pub jump_index: u16,
+    Throw {
+        value: StackItem<'a>,
+    },
+    /// TODO: Should this be handled elsewhere?
+    LookupSwitch {
+        key: StackItem<'a>,
+        data: LookupSwitchData,
+    },
+    /// TODO: Should this be handled elsewhere?
+    TableSwitch {
+        key: StackItem<'a>,
+        data: TableSwitchData,
+    },
 }
 
 /// The type of condition
@@ -451,69 +483,6 @@ pub enum ConditionType {
     LessThanOrEqual,
 }
 
-/// Represents storing something in an array
-#[derive(Debug)]
-pub struct ArrayStore<'a> {
-    /// The reference for the array
-    pub reference: StackItem<'a>,
-    /// The stack item representing the index within the array
-    pub index: StackItem<'a>,
-    /// The value to store at the index
-    pub value: StackItem<'a>,
-}
-
-/// Represents storing something into a field
-#[derive(Debug)]
-pub struct PutField<'a> {
-    /// The field details
-    pub field: Fieldref<'a>,
-    /// The reference to the object the field is on
-    pub reference: StackItem<'a>,
-    /// The value to assign the field
-    pub value: StackItem<'a>,
-}
-
-/// Represents storing something into a static field
-#[derive(Debug)]
-pub struct PutFieldStatic<'a> {
-    /// The field details
-    pub field: Fieldref<'a>,
-    /// The value to assign the field
-    pub value: StackItem<'a>,
-}
-
-/// Represents setting a local variable
-#[derive(Debug)]
-pub struct SetLocal<'a> {
-    /// The index of the local variable
-    pub index: u16,
-    /// The value to store in the local variable
-    pub value: StackItem<'a>,
-}
-
-/// Represents an int increment on a local variable
-#[derive(Debug)]
-pub struct LocalIncrement {
-    /// The index of the local variable
-    pub index: u16,
-    /// The amount to increment by
-    pub value: u16,
-}
-
-/// TODO: Should this be handled elsewhere
-#[derive(Debug)]
-pub struct LookupSwitchImpl<'a> {
-    pub key: StackItem<'a>,
-    pub data: LookupSwitchData,
-}
-
-/// TODO: Should this be handled elsewhere
-#[derive(Debug)]
-pub struct TableSwitchImpl<'a> {
-    pub key: StackItem<'a>,
-    pub data: TableSwitchData,
-}
-
 /// Errors that could occur while processing instructions
 #[derive(Debug, Error)]
 pub enum ProcessError {
@@ -523,12 +492,18 @@ pub enum ProcessError {
     UnexpectedConstantType(PoolIndex),
     #[error(transparent)]
     Stack(#[from] StackError),
+
+    #[error("Invalid field reference index {0}")]
+    InvalidFieldref(u16),
+    #[error("Invalid field reference index {0}")]
+    InvalidMethodref(u16),
 }
 
 fn process<'a>(
     instruction: &Instruction,
     pool: &ConstantPool<'a>,
     stack: &mut Stack<'a>,
+    stms: &mut Vec<AST<'a>>,
 ) -> Result<(), ProcessError> {
     use classfile::inst::Instruction::*;
 
@@ -547,30 +522,45 @@ fn process<'a>(
         AThrow => todo!(),
 
         // Constant value pushes
-        BIPush(_) => todo!(),
-        SIPush(_) => todo!(),
+        BIPush(value) => stack.push_value(Value::Integer(*value as i32)),
+        SIPush(value) => stack.push_value(Value::Integer(*value as i32)),
 
         // Constants
-        IConst(_) => todo!(),
-        FConst(_) => todo!(),
-        DConst(_) => todo!(),
-        LConst(_) => todo!(),
-        AConstNull => todo!(),
+        IConst(value) => stack.push_value(Value::Integer(*value)),
+        FConst(value) => stack.push_value(Value::Float(*value)),
+        DConst(value) => stack.push_value(Value::Double(*value)),
+        LConst(value) => stack.push_value(Value::Long(*value)),
+        AConstNull => stack.push_value(Value::Null),
         LoadConst(_) => todo!(),
 
         // Local variable storing
-        AStore(_) => todo!(),
-        LStore(_) => todo!(),
-        IStore(_) => todo!(),
-        DStore(_) => todo!(),
-        FStore(_) => todo!(),
+        AStore(index) | LStore(index) | IStore(index) | DStore(index) | FStore(index) => {
+            let index = *index;
+            let value = stack.pop()?;
+            stms.push(AST::SetLocal { index, value })
+        }
 
         // Local variable loading
-        FLoad(_) => todo!(),
-        ILoad(_) => todo!(),
-        ALoad(_) => todo!(),
-        DLoad(_) => todo!(),
-        LLoad(_) => todo!(),
+        ILoad(index) => stack.push(StackItem::GetLocal {
+            index: *index,
+            ty: LocalVariableType::Int,
+        }),
+        LLoad(index) => stack.push(StackItem::GetLocal {
+            index: *index,
+            ty: LocalVariableType::Long,
+        }),
+        FLoad(index) => stack.push(StackItem::GetLocal {
+            index: *index,
+            ty: LocalVariableType::Float,
+        }),
+        DLoad(index) => stack.push(StackItem::GetLocal {
+            index: *index,
+            ty: LocalVariableType::Double,
+        }),
+        ALoad(index) => stack.push(StackItem::GetLocal {
+            index: *index,
+            ty: LocalVariableType::Reference,
+        }),
 
         // Function invokes
         InvokeSpecial(_) => todo!(),
@@ -579,31 +569,65 @@ fn process<'a>(
         InvokeInterface(_) => todo!(),
 
         // Storing in fields
-        PutField(_) => todo!(),
-        PutStatic(_) => todo!(),
+        PutField(index) => {
+            let field: Fieldref<'a> = pool
+                .get_fieldref(*index)
+                .ok_or(ProcessError::InvalidFieldref(*index))?;
+
+            let reference: StackItem = stack.pop()?;
+            let value: StackItem = stack.pop()?;
+
+            stms.push(AST::PutField {
+                field,
+                reference,
+                value,
+            })
+        }
+        PutStatic(index) => {
+            let field: Fieldref = pool
+                .get_fieldref(*index)
+                .ok_or(ProcessError::InvalidFieldref(*index))?;
+
+            let value: StackItem = stack.pop()?;
+
+            stms.push(AST::PutFieldStatic { field, value })
+        }
 
         // Retreiving from fields
-        GetStatic(_) => todo!(),
-        GetField(_) => todo!(),
+        GetField(index) => {
+            let field: Fieldref = pool
+                .get_fieldref(*index)
+                .ok_or(ProcessError::InvalidFieldref(*index))?;
+            let reference: Box<StackItem> = stack.pop_boxed()?;
+            stack.push(StackItem::GetField { field, reference })
+        }
+        GetStatic(index) => {
+            let field: Fieldref = pool
+                .get_fieldref(*index)
+                .ok_or(ProcessError::InvalidFieldref(*index))?;
+            stack.push(StackItem::GetFieldStatic { field })
+        }
 
         // Array length access
-        ArrayLength => todo!(),
+        ArrayLength => {
+            let reference: Box<StackItem> = stack.pop_boxed()?;
+            stack.push(StackItem::ArrayLength { reference })
+        }
 
         // Returning
-        Return => todo!(),
-        AReturn => todo!(),
-        DReturn => todo!(),
-        FReturn => todo!(),
-        IReturn => todo!(),
-        LReturn => todo!(),
+        Return => stms.push(AST::Return { value: None }),
+        AReturn | DReturn | FReturn | IReturn | LReturn => {
+            let value = stack.pop()?;
+            stms.push(AST::Return { value: Some(value) })
+        }
 
         // Stack duplicating
-        Dup => todo!(),
-        DupX1 => todo!(),
-        DupX2 => todo!(),
-        Dup2 => todo!(),
-        Dup2X1 => todo!(),
-        Dup2X2 => todo!(),
+        Dup => stack.dup()?,
+        DupX1 => stack.dup_x1()?,
+        DupX2 => stack.dup_x2()?,
+        Dup2 => stack.dup_2()?,
+        Dup2X1 => stack.dup_2x1()?,
+        Dup2X2 => stack.dup_2x2()?,
 
         // Array loading
         IALoad => todo!(),
@@ -722,13 +746,13 @@ fn process<'a>(
         // Array creation
         NewArray(_) => todo!(),
         ANewArray(_) => todo!(),
-        MultiANewArray { index, dimensions } => todo!(),
+        MultiANewArray(data) => todo!(),
 
         // Instance checking
         InstanceOf(_) => todo!(),
 
         // Incrementing
-        IInc { index, value } => todo!(),
+        IInc(data) => todo!(),
 
         // invoke dynamic
         InvokeDynamic(_) => todo!(),

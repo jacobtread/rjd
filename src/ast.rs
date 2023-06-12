@@ -487,8 +487,7 @@ pub fn pinstr<'a, 'b: 'a>(
         // Normal method calls
         InvokeSpecial(index) | InvokeInterface(index) | InvokeVirtual(index) => {
             // TODO: Handle these errors
-            let class_item = pool.get_methodref(*index).unwrap();
-            let methodref = pool.get_methodref_actual(class_item).unwrap();
+            let methodref = pool.get_methodref(*index).unwrap();
 
             let mut args = Vec::with_capacity(methodref.descriptor.parameters.len());
             for _ in 0..args.len() {
@@ -513,8 +512,7 @@ pub fn pinstr<'a, 'b: 'a>(
         // Static method calls
         InvokeStatic(index) => {
             // TODO: Handle these errors
-            let class_item = pool.get_methodref(*index).unwrap();
-            let methodref = pool.get_methodref_actual(class_item).unwrap();
+            let methodref = pool.get_methodref(*index).unwrap();
 
             let mut args = Vec::with_capacity(methodref.descriptor.parameters.len());
             for _ in 0..args.len() {
@@ -546,8 +544,7 @@ pub fn pinstr<'a, 'b: 'a>(
 
         PutField(index) => {
             // TODO: Handle these errors
-            let class_item = pool.get_fieldref(*index).unwrap();
-            let field = pool.get_fieldref_actual(class_item).unwrap();
+            let field = pool.get_fieldref(*index).unwrap();
 
             let value = stack.pop_boxed()?;
             let reference = stack.pop_boxed()?;
@@ -561,8 +558,7 @@ pub fn pinstr<'a, 'b: 'a>(
 
         GetField(index) => {
             // TODO: Handle these errors
-            let class_item = pool.get_fieldref(*index).unwrap();
-            let field = pool.get_fieldref_actual(class_item).unwrap();
+            let field = pool.get_fieldref(*index).unwrap();
             let reference = stack.pop_boxed()?;
 
             stack.push(AST::GetField(super::ast::GetField { field, reference }))
@@ -570,8 +566,7 @@ pub fn pinstr<'a, 'b: 'a>(
 
         PutStatic(index) => {
             // TODO: Handle these errors
-            let class_item = pool.get_fieldref(*index).unwrap();
-            let field = pool.get_fieldref_actual(class_item).unwrap();
+            let field = pool.get_fieldref(*index).unwrap();
 
             let value = stack.pop_boxed()?;
 
@@ -580,8 +575,7 @@ pub fn pinstr<'a, 'b: 'a>(
 
         GetStatic(index) => {
             // TODO: Handle these errors
-            let class_item = pool.get_fieldref(*index).unwrap();
-            let field = pool.get_fieldref_actual(class_item).unwrap();
+            let field = pool.get_fieldref(*index).unwrap();
 
             stack.push(AST::GetStatic(super::ast::GetStatic { field }))
         }

@@ -43,27 +43,38 @@ impl<'a> ConstantPool<'a> {
         }
     }
 
-    pub fn get_methodref(&self, index: PoolIndex) -> Option<ClassItem> {
-        match self.get(index) {
-            Some(ConstantItem::Methodref(value)) => Some(value.clone()),
+    pub fn get_methodref(&self, index: PoolIndex) -> Option<Methodref<'a>> {
+        let class_item = match self.get(index) {
+            Some(ConstantItem::Methodref(value)) => value,
             //TODO: Hacky might not be right
-            Some(ConstantItem::InterfaceMethodref(value)) => Some(value.clone()),
-            _ => None,
-        }
+            Some(ConstantItem::InterfaceMethodref(value)) => value,
+            _ => return None,
+        };
+
+        let class: Class<'a> = Class::try_parse(self.get_class_name(class_item.class)?)?;
+        let name_and_type = self.get_name_and_type(class_item.name_and_type)?;
+        let name_and_type = self.get_method_name_and_type(name_and_type)?;
+        Some(Methodref {
+            class,
+            name: name_and_type.name,
+            descriptor: name_and_type.descriptor,
+        })
     }
 
-    pub fn get_interfacemethodref(&self, index: PoolIndex) -> Option<ClassItem> {
-        match self.get(index) {
-            Some(ConstantItem::InterfaceMethodref(value)) => Some(value.clone()),
-            _ => None,
-        }
-    }
+    pub fn get_fieldref(&self, index: PoolIndex) -> Option<Fieldref<'a>> {
+        let class_item = match self.get(index) {
+            Some(ConstantItem::Fieldref(value)) => value,
+            _ => return None,
+        };
 
-    pub fn get_fieldref(&self, index: PoolIndex) -> Option<ClassItem> {
-        match self.get(index) {
-            Some(ConstantItem::Fieldref(value)) => Some(value.clone()),
-            _ => None,
-        }
+        let class: Class<'a> = Class::try_parse(self.get_class_name(class_item.class)?)?;
+        let name_and_type = self.get_name_and_type(class_item.name_and_type)?;
+        let name_and_type = self.get_field_name_and_type(name_and_type)?;
+        Some(Fieldref {
+            class,
+            name: name_and_type.name,
+            descriptor: name_and_type.descriptor,
+        })
     }
 
     pub fn get_class_name(&self, index: PoolIndex) -> Option<&'a str> {
@@ -94,27 +105,6 @@ impl<'a> ConstantPool<'a> {
         // TODO: Handling invalid descriptors
         let (_, descriptor) = method_descriptor(descriptor).ok()?;
         Some(MethodNameAndType { name, descriptor })
-    }
-
-    pub fn get_methodref_actual(&self, item: ClassItem) -> Option<Methodref<'a>> {
-        let class: Class<'a> = Class::try_parse(self.get_class_name(item.class)?)?;
-        let name_and_type = self.get_name_and_type(item.name_and_type)?;
-        let name_and_type = self.get_method_name_and_type(name_and_type)?;
-        Some(Methodref {
-            class,
-            name: name_and_type.name,
-            descriptor: name_and_type.descriptor,
-        })
-    }
-    pub fn get_fieldref_actual(&self, item: ClassItem) -> Option<Fieldref<'a>> {
-        let class: Class<'a> = Class::try_parse(self.get_class_name(item.class)?)?;
-        let name_and_type = self.get_name_and_type(item.name_and_type)?;
-        let name_and_type = self.get_field_name_and_type(name_and_type)?;
-        Some(Fieldref {
-            class,
-            name: name_and_type.name,
-            descriptor: name_and_type.descriptor,
-        })
     }
 
     pub fn get_invokedynamic(&self, index: PoolIndex) -> Option<InvokeDynamic> {

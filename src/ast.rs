@@ -717,7 +717,6 @@ pub fn pinstr<'a, 'b: 'a>(
             }))
         }
 
-        // ^ XOR operation
         IXOr | LXOr => {
             let left = stack.pop_boxed()?;
             let right = stack.pop_boxed()?;

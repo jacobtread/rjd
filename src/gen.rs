@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use classfile::{
     attributes::{BorrowedInstrSet, InstructionSet},
-    constant_pool::{ConstantPool, Fieldref, InvokeDynamic, Methodref},
+    constant_pool::{ConstantPool, Fieldref, InvokeDynamic, Methodref, PoolIndex},
     inst::{ArrayType, Instruction, LookupSwitchData, TableSwitchData},
     types::{Class, FieldDesc},
 };
@@ -509,12 +509,260 @@ pub struct TableSwitchImpl<'a> {
     pub data: TableSwitchData,
 }
 
+/// Errors that could occur while processing instructions
+#[derive(Debug, Error)]
+pub enum ProcessError {
+    #[error("Missing constant at index {0}")]
+    MissingConstant(PoolIndex),
+    #[error("Unexpected constant pool type at index {0}")]
+    UnexpectedConstantType(PoolIndex),
+    #[error(transparent)]
+    Stack(#[from] StackError),
+}
+
 fn process<'a>(
     instruction: &Instruction,
     pool: &ConstantPool<'a>,
     stack: &mut Stack<'a>,
-) -> Result<(), ()> {
+) -> Result<(), ProcessError> {
     use classfile::inst::Instruction::*;
+
+    match instruction {
+        Swap => stack.swap()?,
+
+        // Popping
+        Pop2 => todo!(),
+        Pop => todo!(),
+
+        // Cast checking
+        CheckCast(_) => todo!(),
+
+        // Exception throwing
+        AThrow => todo!(),
+
+        // Constant value pushes
+        BIPush(_) => todo!(),
+        SIPush(_) => todo!(),
+
+        // Constants
+        IConst(_) => todo!(),
+        FConst(_) => todo!(),
+        DConst(_) => todo!(),
+        LConst(_) => todo!(),
+        AConstNull => todo!(),
+        LoadConst(_) => todo!(),
+
+        // Local variable storing
+        AStore(_) => todo!(),
+        LStore(_) => todo!(),
+        IStore(_) => todo!(),
+        DStore(_) => todo!(),
+        FStore(_) => todo!(),
+
+        // Local variable loading
+        FLoad(_) => todo!(),
+        ILoad(_) => todo!(),
+        ALoad(_) => todo!(),
+        DLoad(_) => todo!(),
+        LLoad(_) => todo!(),
+
+        // Function invokes
+        InvokeSpecial(_) => todo!(),
+        InvokeStatic(_) => todo!(),
+        InvokeVirtual(_) => todo!(),
+        InvokeInterface(_) => todo!(),
+
+        // Storing in fields
+        PutField(_) => todo!(),
+        PutStatic(_) => todo!(),
+
+        // Retreiving from fields
+        GetStatic(_) => todo!(),
+        GetField(_) => todo!(),
+
+        // Array length access
+        ArrayLength => todo!(),
+
+        // Returning
+        Return => todo!(),
+        AReturn => todo!(),
+        DReturn => todo!(),
+        FReturn => todo!(),
+        IReturn => todo!(),
+        LReturn => todo!(),
+
+        // Stack duplicating
+        Dup => todo!(),
+        DupX1 => todo!(),
+        DupX2 => todo!(),
+        Dup2 => todo!(),
+        Dup2X1 => todo!(),
+        Dup2X2 => todo!(),
+
+        // Array loading
+        IALoad => todo!(),
+        LALoad => todo!(),
+        DALoad => todo!(),
+        FALoad => todo!(),
+        SALoad => todo!(),
+        CALoad => todo!(),
+        BALoad => todo!(),
+        AALoad => todo!(),
+
+        // Array storing
+        IAStore => todo!(),
+        LAStore => todo!(),
+        DAStore => todo!(),
+        FAStore => todo!(),
+        SAStore => todo!(),
+        CAStore => todo!(),
+        BAStore => todo!(),
+        AAStore => todo!(),
+
+        // Adding
+        IAdd => todo!(),
+        LAdd => todo!(),
+        FAdd => todo!(),
+        DAdd => todo!(),
+
+        // Subtracting
+        ISub => todo!(),
+        LSub => todo!(),
+        FSub => todo!(),
+        DSub => todo!(),
+
+        // Dividing
+        IDiv => todo!(),
+        LDiv => todo!(),
+        FDiv => todo!(),
+        DDiv => todo!(),
+
+        // Multiplying
+        IMul => todo!(),
+        LMul => todo!(),
+        FMul => todo!(),
+        DMul => todo!(),
+
+        // Negating
+        INeg => todo!(),
+        LNeg => todo!(),
+        FNeg => todo!(),
+        DNeg => todo!(),
+
+        // Remainder
+        IRem => todo!(),
+        LRem => todo!(),
+        FRem => todo!(),
+        DRem => todo!(),
+
+        // Bitwise And
+        IAnd => todo!(),
+        LAnd => todo!(),
+
+        // | Bitwise OR operation
+        LOr => todo!(),
+        IOr => todo!(),
+
+        // ^ XOR operation
+        LXOr => todo!(),
+        IXOr => todo!(),
+
+        FCmpL => todo!(),
+        FCmpG => todo!(),
+
+        // Int casting
+        I2l => todo!(),
+        I2d => todo!(),
+        I2s => todo!(),
+        I2c => todo!(),
+        I2b => todo!(),
+        I2f => todo!(),
+        // Long Casting
+        L2i => todo!(),
+        L2d => todo!(),
+        L2f => todo!(),
+        // Float Casting
+        F2d => todo!(),
+        F2i => todo!(),
+        F2l => todo!(),
+        // Double casting
+        D2i => todo!(),
+        D2f => todo!(),
+        D2l => todo!(),
+
+        // << Bitwise shift left operation
+        IShL => todo!(),
+        LShL => todo!(),
+
+        // >> Bitwise shift right operation
+        IShR => todo!(),
+        LShR => todo!(),
+
+        // >>> Logical shift right operation
+        IUShR => todo!(),
+        LUShR => todo!(),
+
+        // Switches
+        TableSwitch(_) => todo!(),
+        LookupSwitch(_) => todo!(),
+
+        // Monitoring
+        MonitorEnter => todo!(),
+        MonitorExit => todo!(),
+
+        // New instance creation
+        New(_) => todo!(),
+
+        // Array creation
+        NewArray(_) => todo!(),
+        ANewArray(_) => todo!(),
+        MultiANewArray { index, dimensions } => todo!(),
+
+        // Instance checking
+        InstanceOf(_) => todo!(),
+
+        // Incrementing
+        IInc { index, value } => todo!(),
+
+        // invoke dynamic
+        InvokeDynamic(_) => todo!(),
+
+        // Reference compare
+        IfACmpEq(_) => todo!(),
+        IfACmpNe(_) => todo!(),
+
+        // Int compare
+        IfICmpEq(_) => todo!(),
+        IfICmpNe(_) => todo!(),
+        IfICmpLt(_) => todo!(),
+        IfICmpGe(_) => todo!(),
+        IfICmpGt(_) => todo!(),
+        IfICmpLe(_) => todo!(),
+
+        // Double compare
+        DCmpL => todo!(),
+        DCmpG => todo!(),
+
+        // Long compare
+        LCmp => todo!(),
+
+        // Null compare
+        IfNull(_) => todo!(),
+        IfNonNull(_) => todo!(),
+
+        // Int zero compare
+        IfEq(_) => todo!(),
+        IfNe(_) => todo!(),
+        IfLt(_) => todo!(),
+        IfGe(_) => todo!(),
+        IfGt(_) => todo!(),
+        IfLe(_) => todo!(),
+
+        Goto(_) => todo!(),
+        JSr(_) => todo!(),
+        Ret(_) => todo!(),
+        Nop => todo!(),
+    }
 
     Ok(())
 }

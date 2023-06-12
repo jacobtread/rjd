@@ -1,6 +1,11 @@
-use std::fmt::{Display, Write};
+use std::fmt::{Debug, Display, Write};
 
-use classfile::class::{AccessFlags, ClassFile};
+use classfile::{
+    attributes::Attribute,
+    class::{AccessFlags, ClassFile},
+};
+
+use crate::ast::generate_ast;
 
 struct JavaClassRenderer<'a> {
     class: ClassFile<'a>,
@@ -131,7 +136,7 @@ impl Display for JavaClassRenderer<'_> {
         for field in &class.fields {
             f.write_str("  ")?;
             field_flags_fmt(&field.access_flags, f)?;
-            field.descriptor.fmt(f)?;
+            std::fmt::Display::fmt(&field.descriptor, f)?;
             f.write_char(' ')?;
             f.write_str(field.name)?;
             f.write_str(";\n")?;
@@ -148,6 +153,20 @@ impl Display for JavaClassRenderer<'_> {
                     &method.descriptor.return_type, &method.name
                 )?;
                 f.write_char('\n')?;
+
+                let code = method.attributes.iter().find_map(|value| match value {
+                    Attribute::Code(value) => Some(value),
+                    _ => None,
+                });
+
+                if let Some(code) = code {
+                    let ast = generate_ast(code, &class.constant_pool).unwrap();
+
+                    write!(f, "{:#?}", ast)?;
+
+                    f.write_char('\n')?;
+                }
+                f.write_char('}')?;
             }
 
             f.write_char('\n')?;

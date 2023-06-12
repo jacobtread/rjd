@@ -1,13 +1,17 @@
 use classfile::{
     attributes::Code,
-    constant_pool::{ConstantItem, ConstantPool, PoolIndex},
-    inst::LookupSwitchData,
+    class::Method,
+    constant_pool::{
+        ClassItem, ConstantItem, ConstantPool, MethodNameAndType, Methodref, PoolIndex,
+    },
+    inst::{ArrayType, Instruction, LookupSwitchData},
+    types::{FieldDesc, MethodDescriptor},
 };
 use thiserror::Error;
 
+#[derive(Debug)]
 pub enum AST<'a> {
-    /// Constant literals
-    Constant(Constant<'a>),
+    Value(Value<'a>),
     /// Operation on two different AST items
     Operation(Operation<'a>),
     /// Negated value -1
@@ -18,24 +22,60 @@ pub enum AST<'a> {
     IntegerSwitch(IntegerSwitch<'a>),
     /// Return with optional value
     Return(Option<Box<AST<'a>>>),
+    /// Variable
+    LocalVariable(u16, LocalVariableType),
+
+    MethodCall(MethodCall<'a>),
+
+    StaticMethodCall(StaticMethodCall<'a>),
+
+    Other(Instruction),
 }
+
+#[derive(Debug)]
+
+pub struct MethodCall<'a> {
+    pub method_ref: Methodref<'a>,
+    pub reference: Box<AST<'a>>,
+    pub args: Vec<AST<'a>>,
+}
+
+#[derive(Debug)]
+
+pub struct StaticMethodCall<'a> {
+    pub method_ref: Methodref<'a>,
+    pub args: Vec<AST<'a>>,
+}
+
+#[derive(Debug)]
+pub enum LocalVariableType {
+    Int,
+    Long,
+    Float,
+    Double,
+    Reference,
+}
+
+#[derive(Debug)]
 
 pub struct IntegerSwitch<'a> {
-    key: Box<AST<'a>>,
-    data: LookupSwitchData,
+    pub key: Box<AST<'a>>,
+    pub data: LookupSwitchData,
 }
 
+#[derive(Debug)]
 pub struct JumpCondition<'a> {
     /// Left hand side of the condition
-    left: Box<AST<'a>>,
+    pub left: Box<AST<'a>>,
     /// Right hand side of the condition
-    right: Box<AST<'a>>,
+    pub right: Box<AST<'a>>,
     /// The actual condition
-    ty: ConditionType,
+    pub ty: ConditionType,
     /// The position to jump to
-    jump_index: u16,
+    pub jump_index: u16,
 }
 
+#[derive(Debug)]
 pub enum ConditionType {
     Equal,
     NotEqual,
@@ -45,19 +85,28 @@ pub enum ConditionType {
     LessThanOrEqual,
 }
 
+#[derive(Debug)]
 pub struct Operation<'a> {
-    left: Box<AST<'a>>,
-    ty: OperationType,
-    right: Box<AST<'a>>,
+    pub left: Box<AST<'a>>,
+    pub ty: OperationType,
+    pub right: Box<AST<'a>>,
 }
 
-pub enum Constant<'a> {
+#[derive(Debug)]
+pub enum Value<'a> {
     Null,
     String(&'a str),
     Integer(i32),
     Float(f32),
     Long(i64),
     Double(f64),
+    Short(i16),
+}
+
+#[derive(Debug)]
+pub struct PrimitiveArray<'a> {
+    pub count: Box<AST<'a>>,
+    pub ty: ArrayType,
 }
 
 #[derive(Debug, Error)]
@@ -70,28 +119,29 @@ pub enum InstrError {
     Stack(#[from] StackError),
 }
 
-impl<'a> Constant<'a> {
+impl<'a> Value<'a> {
     pub fn try_from_pool(
         index: PoolIndex,
         pool: &ConstantPool<'a>,
-    ) -> Result<Constant<'a>, InstrError> {
+    ) -> Result<Value<'a>, InstrError> {
         let value = pool.get(index).ok_or(InstrError::MissingConstant(index))?;
         Ok(match value {
-            ConstantItem::Integer(value) => Constant::Integer(*value),
-            ConstantItem::Float(value) => Constant::Float(*value),
-            ConstantItem::Long(value) => Constant::Long(*value),
-            ConstantItem::Double(value) => Constant::Double(*value),
+            ConstantItem::Integer(value) => Value::Integer(*value),
+            ConstantItem::Float(value) => Value::Float(*value),
+            ConstantItem::Long(value) => Value::Long(*value),
+            ConstantItem::Double(value) => Value::Double(*value),
             ConstantItem::String(value) => {
                 let value = pool
                     .get_utf8(*value)
                     .ok_or(InstrError::UnexpectedConstantType(index))?;
-                Constant::String(value)
+                Value::String(value)
             }
             _ => return Err(InstrError::UnexpectedConstantType(index)),
         })
     }
 }
 
+#[derive(Debug)]
 pub enum OperationType {
     Muliply,
     Divide,
@@ -140,6 +190,15 @@ impl<'a> Stack<'a> {
         self.inner.pop().ok_or(StackError::Empty)
     }
 
+    fn pop2(&mut self) -> StackResult<()> {
+        let top = self.pop()?;
+        if !matches!(top, AST::Value(Value::Double(_) | Value::Long(_))) {
+            self.pop()?;
+        }
+
+        Ok(())
+    }
+
     fn pop_boxed(&mut self) -> StackResult<Box<AST<'a>>> {
         self.pop().map(Box::new)
     }
@@ -158,7 +217,10 @@ impl<'a> Stack<'a> {
     }
 }
 
-pub fn generate_ast<'a>(code: Code, pool: &ConstantPool<'a>) -> Result<(), InstrError> {
+pub fn generate_ast<'a, 'b: 'a>(
+    code: &Code,
+    pool: &'b ConstantPool<'a>,
+) -> Result<Vec<AST<'a>>, InstrError> {
     use classfile::inst::Instruction::*;
 
     let mut stack: Stack<'a> = Stack::default();
@@ -171,18 +233,84 @@ pub fn generate_ast<'a>(code: Code, pool: &ConstantPool<'a>) -> Result<(), Instr
                 stack.swap()?;
             }
 
+            // Normal method calls
+            InvokeSpecial(index) | InvokeInterface(index) | InvokeVirtual(index) => {
+                // TODO: Handle these errors
+                let class_item = pool.get_methodref(*index).unwrap();
+                let methodref = pool.get_methodref_actual(class_item).unwrap();
+
+                let mut args =
+                    Vec::with_capacity(methodref.name_and_type.descriptor.parameters.len());
+                for _ in 0..args.len() {
+                    args.push(stack.pop()?);
+                }
+                args.reverse();
+                let reference = stack.pop_boxed()?;
+
+                let call = MethodCall {
+                    method_ref: methodref,
+                    reference,
+                    args,
+                };
+
+                if let FieldDesc::Void = &call.method_ref.name_and_type.descriptor.return_type {
+                    ast.push(AST::MethodCall(call))
+                } else {
+                    stack.push(AST::MethodCall(call))
+                }
+            }
+
+            // Static method calls
+            InvokeStatic(index) => {
+                // TODO: Handle these errors
+                let class_item = pool.get_methodref(*index).unwrap();
+                let methodref = pool.get_methodref_actual(class_item).unwrap();
+
+                let mut args =
+                    Vec::with_capacity(methodref.name_and_type.descriptor.parameters.len());
+                for _ in 0..args.len() {
+                    args.push(stack.pop()?);
+                }
+                args.reverse();
+
+                let call = StaticMethodCall {
+                    method_ref: methodref,
+                    args,
+                };
+                if let FieldDesc::Void = &call.method_ref.name_and_type.descriptor.return_type {
+                    ast.push(AST::StaticMethodCall(call))
+                } else {
+                    stack.push(AST::StaticMethodCall(call))
+                }
+            }
+
+            // Local variable loads
+            ILoad(index) => stack.push(AST::LocalVariable(*index, LocalVariableType::Int)),
+            LLoad(index) => stack.push(AST::LocalVariable(*index, LocalVariableType::Long)),
+            FLoad(index) => stack.push(AST::LocalVariable(*index, LocalVariableType::Float)),
+            DLoad(index) => stack.push(AST::LocalVariable(*index, LocalVariableType::Double)),
+            ALoad(index) => stack.push(AST::LocalVariable(*index, LocalVariableType::Reference)),
+
             // Push constant onto the stack from the constant pool
             LoadConst(index) => {
-                let value = Constant::try_from_pool(*index, pool)?;
-                stack.push(AST::Constant(value))
+                let value = Value::try_from_pool(*index, pool)?;
+                stack.push(AST::Value(value))
             }
 
             // Pushing constants
-            IConst(value) => stack.push(AST::Constant(Constant::Integer(*value))),
-            DConst(value) => stack.push(AST::Constant(Constant::Double(*value))),
-            FConst(value) => stack.push(AST::Constant(Constant::Float(*value))),
-            LConst(value) => stack.push(AST::Constant(Constant::Long(*value))),
-            AConstNull => stack.push(AST::Constant(Constant::Null)),
+            IConst(value) => stack.push(AST::Value(Value::Integer(*value))),
+            DConst(value) => stack.push(AST::Value(Value::Double(*value))),
+            FConst(value) => stack.push(AST::Value(Value::Float(*value))),
+            LConst(value) => stack.push(AST::Value(Value::Long(*value))),
+            AConstNull => stack.push(AST::Value(Value::Null)),
+
+            BIPush(value) => stack.push(AST::Value(Value::Integer(*value as i32))),
+            SIPush(value) => stack.push(AST::Value(Value::Short(*value))),
+
+            MonitorEnter | MonitorExit | Pop => {
+                stack.pop()?;
+            }
+            Pop2 => stack.pop2()?,
 
             // * Multiply operation
             IMul | FMul | DMul | LMul => {
@@ -425,7 +553,7 @@ pub fn generate_ast<'a>(code: Code, pool: &ConstantPool<'a>) -> Result<(), Instr
             // value != null non null comparison
             IfNonNull(index) => {
                 let left = stack.pop_boxed()?;
-                let right = Box::new(AST::Constant(Constant::Null));
+                let right = Box::new(AST::Value(Value::Null));
 
                 // left MUST be a reference or null constant
 
@@ -440,7 +568,7 @@ pub fn generate_ast<'a>(code: Code, pool: &ConstantPool<'a>) -> Result<(), Instr
             // value == null null comparison
             IfNull(index) => {
                 let left = stack.pop_boxed()?;
-                let right = Box::new(AST::Constant(Constant::Null));
+                let right = Box::new(AST::Value(Value::Null));
 
                 // left MUST be a reference or null constant
 
@@ -472,9 +600,9 @@ pub fn generate_ast<'a>(code: Code, pool: &ConstantPool<'a>) -> Result<(), Instr
             // return; Void return
             Return => ast.push(AST::Return(None)),
 
-            _ => {}
+            value => ast.push(AST::Other(value.clone())),
         }
     }
 
-    Ok(())
+    Ok(ast)
 }

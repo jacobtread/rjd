@@ -8,6 +8,8 @@ use nom::{
 use strum_macros::FromRepr;
 use thiserror::Error;
 
+use crate::types::{field_descriptor, method_descriptor, Class, FieldDesc, MethodDescriptor};
+
 pub type PoolIndex = u16;
 pub type ClassIndex = PoolIndex;
 pub type Utf8Index = PoolIndex;
@@ -34,12 +36,74 @@ impl<'a> ConstantPool<'a> {
         }
     }
 
+    pub fn get_name_and_type(&self, index: PoolIndex) -> Option<NameAndType> {
+        match self.get(index) {
+            Some(ConstantItem::NameAndType(value)) => Some(value.clone()),
+            _ => None,
+        }
+    }
+
+    pub fn get_methodref(&self, index: PoolIndex) -> Option<ClassItem> {
+        match self.get(index) {
+            Some(ConstantItem::Methodref(value)) => Some(value.clone()),
+            //TODO: Hacky might not be right
+            Some(ConstantItem::InterfaceMethodref(value)) => Some(value.clone()),
+            _ => None,
+        }
+    }
+
+    pub fn get_interfacemethodref(&self, index: PoolIndex) -> Option<ClassItem> {
+        match self.get(index) {
+            Some(ConstantItem::InterfaceMethodref(value)) => Some(value.clone()),
+            _ => None,
+        }
+    }
+
+    pub fn get_fieldref(&self, index: PoolIndex) -> Option<ClassItem> {
+        match self.get(index) {
+            Some(ConstantItem::Fieldref(value)) => Some(value.clone()),
+            _ => None,
+        }
+    }
+
     pub fn get_class_name(&self, index: PoolIndex) -> Option<&'a str> {
         let index = match self.get(index) {
             Some(ConstantItem::Class(value)) => value.name,
             _ => return None,
         };
         self.get_utf8(index)
+    }
+
+    pub fn get_field_name_and_type(
+        &self,
+        name_and_type: NameAndType,
+    ) -> Option<FieldNameAndType<'a>> {
+        let name = self.get_utf8(name_and_type.name)?;
+        let descriptor = self.get_utf8(name_and_type.descriptor)?;
+        // TODO: Handling invalid descriptors
+        let (_, descriptor) = field_descriptor(descriptor).ok()?;
+        Some(FieldNameAndType { name, descriptor })
+    }
+
+    pub fn get_method_name_and_type(
+        &self,
+        name_and_type: NameAndType,
+    ) -> Option<MethodNameAndType<'a>> {
+        let name = self.get_utf8(name_and_type.name)?;
+        let descriptor = self.get_utf8(name_and_type.descriptor)?;
+        // TODO: Handling invalid descriptors
+        let (_, descriptor) = method_descriptor(descriptor).ok()?;
+        Some(MethodNameAndType { name, descriptor })
+    }
+
+    pub fn get_methodref_actual(&self, item: ClassItem) -> Option<Methodref<'a>> {
+        let class: Class<'a> = Class::try_parse(self.get_class_name(item.class)?)?;
+        let name_and_type = self.get_name_and_type(item.name_and_type)?;
+        let name_and_type = self.get_method_name_and_type(name_and_type)?;
+        Some(Methodref {
+            class,
+            name_and_type,
+        })
     }
 }
 
@@ -191,16 +255,34 @@ pub struct ClassInfo {
 }
 
 /// Blanket type for Fieldref, Methodref, InterfaceMethodref
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ClassItem {
     pub class: ClassIndex,
     pub name_and_type: NameAndTypeIndex,
 }
 
 #[derive(Debug)]
+pub struct Methodref<'a> {
+    pub class: Class<'a>,
+    pub name_and_type: MethodNameAndType<'a>,
+}
+
+#[derive(Debug, Clone)]
 pub struct NameAndType {
     pub name: Utf8Index,
     pub descriptor: Utf8Index,
+}
+
+#[derive(Debug)]
+pub struct MethodNameAndType<'a> {
+    pub name: &'a str,
+    pub descriptor: MethodDescriptor<'a>,
+}
+
+#[derive(Debug)]
+pub struct FieldNameAndType<'a> {
+    pub name: &'a str,
+    pub descriptor: FieldDesc<'a>,
 }
 
 #[derive(Debug)]

@@ -12,7 +12,7 @@ use crate::constant_pool::PoolIndex;
 pub type Index = u16;
 pub type BranchIndex = u16;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum ArrayType {
     Boolean = 4,
     Char = 5,
@@ -324,7 +324,7 @@ pub fn instruction(input: &[u8], wide: bool, pos: i32) -> IResult<&[u8], Instruc
     Ok((input, instr))
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Instruction {
     SALoad,
     TableSwitch {

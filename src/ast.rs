@@ -10,47 +10,37 @@ use thiserror::Error;
 
 #[derive(Debug, Clone)]
 pub enum AST<'a> {
-    Value(Value<'a>),
-    /// Operation on two different AST items
-    Operation(Operation<'a>),
-
-    /// Increment local var at index by value (index, value)
-    Increment(u16, i16),
-
-    /// Conditial statement
-    Condition(JumpCondition<'a>),
     /// Integer switch
     IntegerSwitch(IntegerSwitch<'a>),
     TableSwitch(TableSwitchImpl<'a>),
+
+    Throw(Value<'a>),
+    Jsr(u16),
+    Ret(u16),
+    Other(Instruction),
+    InvokeDynamic(InvokeDynamic),
+
+    /// Increment local var at index by value (index, value)
+    Increment(u16, i16),
+    Value(Value<'a>),
+    /// Operation on two different AST items
+    Operation(Operation<'a>),
+    ArrayStore(ArrayStore<'a>),
+    ArrayLoad(ArrayLoad<'a>),
+    /// Conditial statement
+    Condition(JumpCondition<'a>),
     /// Return with optional value
     Return(Option<Box<AST<'a>>>),
     /// Variable
-    LocalVariable(u16, LocalVariableType),
-
+    LocalVarriable(u16, LocalVariableType),
     // Store a value in a local variable
     SetLocalVariable(u16, Box<AST<'a>>),
-
     MethodCall(MethodCall<'a>),
-
     StaticMethodCall(StaticMethodCall<'a>),
-
     PutField(PutField<'a>),
     GetField(GetField<'a>),
     PutStatic(PutStatic<'a>),
     GetStatic(GetStatic<'a>),
-
-    ArrayStore(ArrayStore<'a>),
-    ArrayLoad(ArrayLoad<'a>),
-
-    Throw(Value<'a>),
-    InstanceOf(Class<'a>, Value<'a>),
-
-    Jsr(u16),
-    Ret(u16),
-
-    InvokeDynamic(InvokeDynamic),
-
-    Other(Instruction),
 }
 
 #[derive(Debug, Clone)]
@@ -156,6 +146,25 @@ pub struct Operation<'a> {
     pub left: Box<AST<'a>>,
     pub ty: OperationType,
     pub right: Box<AST<'a>>,
+}
+
+#[derive(Debug, Clone)]
+pub enum OperationType {
+    Muliply,
+    Divide,
+    Subtract,
+    Add,
+    CompareGreater,
+    CompareLess,
+    SignedCompare,
+    Xor,
+    BitwiseAnd,
+    BitwiseOr,
+    BitwiseShl,
+    BitwiseShr,
+    LogicalShr,
+    Remainder,
+    InstanceOf,
 }
 
 #[derive(Debug, Clone)]
@@ -266,24 +275,6 @@ impl<'a> Value<'a> {
             _ => return Err(InstrError::UnexpectedConstantType(index)),
         })
     }
-}
-
-#[derive(Debug, Clone)]
-pub enum OperationType {
-    Muliply,
-    Divide,
-    Subtract,
-    Add,
-    CompareGreater,
-    CompareLess,
-    SignedCompare,
-    Xor,
-    BitwiseAnd,
-    BitwiseOr,
-    BitwiseShl,
-    BitwiseShr,
-    LogicalShr,
-    Remainder,
 }
 
 #[derive(Default)]
@@ -499,7 +490,7 @@ pub fn pinstr<'a, 'b: 'a>(
             let class_item = pool.get_methodref(*index).unwrap();
             let methodref = pool.get_methodref_actual(class_item).unwrap();
 
-            let mut args = Vec::with_capacity(methodref.name_and_type.descriptor.parameters.len());
+            let mut args = Vec::with_capacity(methodref.descriptor.parameters.len());
             for _ in 0..args.len() {
                 args.push(stack.pop()?);
             }
@@ -512,10 +503,7 @@ pub fn pinstr<'a, 'b: 'a>(
                 args,
             };
 
-            if !matches!(
-                &call.method_ref.name_and_type.descriptor.return_type,
-                FieldDesc::Void
-            ) {
+            if !matches!(&call.method_ref.descriptor.return_type, FieldDesc::Void) {
                 stack.push(AST::MethodCall(call.clone()))
             }
 
@@ -528,7 +516,7 @@ pub fn pinstr<'a, 'b: 'a>(
             let class_item = pool.get_methodref(*index).unwrap();
             let methodref = pool.get_methodref_actual(class_item).unwrap();
 
-            let mut args = Vec::with_capacity(methodref.name_and_type.descriptor.parameters.len());
+            let mut args = Vec::with_capacity(methodref.descriptor.parameters.len());
             for _ in 0..args.len() {
                 args.push(stack.pop()?);
             }
@@ -538,7 +526,7 @@ pub fn pinstr<'a, 'b: 'a>(
                 method_ref: methodref,
                 args,
             };
-            if let FieldDesc::Void = &call.method_ref.name_and_type.descriptor.return_type {
+            if let FieldDesc::Void = &call.method_ref.descriptor.return_type {
                 ast.push(AST::StaticMethodCall(call))
             } else {
                 stack.push(AST::StaticMethodCall(call))
@@ -784,6 +772,8 @@ pub fn pinstr<'a, 'b: 'a>(
                 _ => panic!("Unexpected value type TODO: HAndle"),
             };
 
+            // TODO: USE NEGATED STACK ITEM
+
             stack.push(AST::Value(new_value))
         }
 
@@ -985,8 +975,12 @@ pub fn pinstr<'a, 'b: 'a>(
         InstanceOf(index) => {
             let class = Class::try_parse(pool.get_class_name(*index).unwrap()).unwrap();
             let value = stack.pop_value()?;
-            stack.push(AST::Value(Value::Integer(0)));
-            ast.push(AST::InstanceOf(class, value))
+
+            stack.push(AST::Operation(Operation {
+                left: Box::new(AST::Value(value)),
+                ty: OperationType::InstanceOf,
+                right: Box::new(AST::Value(Value::Objectref(class))),
+            }));
         }
 
         IfEq(index) => {

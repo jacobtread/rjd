@@ -102,7 +102,8 @@ impl<'a> ConstantPool<'a> {
         let name_and_type = self.get_method_name_and_type(name_and_type)?;
         Some(Methodref {
             class,
-            name_and_type,
+            name: name_and_type.name,
+            descriptor: name_and_type.descriptor,
         })
     }
     pub fn get_fieldref_actual(&self, item: ClassItem) -> Option<Fieldref<'a>> {
@@ -111,7 +112,8 @@ impl<'a> ConstantPool<'a> {
         let name_and_type = self.get_field_name_and_type(name_and_type)?;
         Some(Fieldref {
             class,
-            name_and_type,
+            name: name_and_type.name,
+            descriptor: name_and_type.descriptor,
         })
     }
 
@@ -280,13 +282,15 @@ pub struct ClassItem {
 #[derive(Debug, Clone)]
 pub struct Methodref<'a> {
     pub class: Class<'a>,
-    pub name_and_type: MethodNameAndType<'a>,
+    pub name: &'a str,
+    pub descriptor: MethodDescriptor<'a>,
 }
 
 #[derive(Debug, Clone)]
 pub struct Fieldref<'a> {
     pub class: Class<'a>,
-    pub name_and_type: FieldNameAndType<'a>,
+    pub name: &'a str,
+    pub descriptor: FieldDesc<'a>,
 }
 
 #[derive(Debug, Clone)]

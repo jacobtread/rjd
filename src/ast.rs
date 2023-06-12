@@ -14,6 +14,7 @@ pub struct Operation<'a> {
 }
 
 pub enum Constant<'a> {
+    Null,
     String(&'a str),
     Integer(i32),
     Float(f32),
@@ -99,6 +100,10 @@ impl<'a> Stack<'a> {
         self.inner.pop().ok_or(StackError::Empty)
     }
 
+    fn pop_boxed(&mut self) -> StackResult<Box<AST>> {
+        self.pop().map(Box::new)
+    }
+
     fn swap(&mut self) -> StackResult<()> {
         let length = self.inner.len();
         if length < 2 {
@@ -137,15 +142,60 @@ pub fn generate_ast<'a>(code: Code, pool: &ConstantPool<'a>) -> Result<(), Instr
             DConst(value) => stack.push(StackItem::Constant(Constant::Double(*value))),
             FConst(value) => stack.push(StackItem::Constant(Constant::Float(*value))),
             LConst(value) => stack.push(StackItem::Constant(Constant::Long(*value))),
+            AConstNull => stack.push(StackItem::Constant(Constant::Null)),
 
-            // Multiply operation
+            // * Multiply operation
             IMul | FMul | DMul | LMul => {
-                let left = stack.pop()?;
-                let right = stack.pop()?;
+                let left = stack.pop_boxed()?;
+                let right = stack.pop_boxed()?;
                 ast.push(AST::Operation(Operation {
-                    left: Box::new(left),
+                    left,
                     ty: OperationType::Muliply,
-                    right: Box::new(right),
+                    right,
+                }))
+            }
+
+            // / Divide operation
+            IDiv | FDiv | DDiv | LDiv => {
+                let left = stack.pop_boxed()?;
+                let right = stack.pop_boxed()?;
+                ast.push(AST::Operation(Operation {
+                    left,
+                    ty: OperationType::Divide,
+                    right,
+                }))
+            }
+
+            // + Add operation
+            IAdd | FAdd | DAdd | LAdd => {
+                let left = stack.pop_boxed()?;
+                let right = stack.pop_boxed()?;
+                ast.push(AST::Operation(Operation {
+                    left,
+                    ty: OperationType::Add,
+                    right,
+                }))
+            }
+
+            // - Subtract operation
+            ISub | FSub | DSub | LSub => {
+                let left = stack.pop_boxed()?;
+                let right = stack.pop_boxed()?;
+                ast.push(AST::Operation(Operation {
+                    left,
+                    ty: OperationType::Subtract,
+                    right,
+                }))
+            }
+
+            // % Remainder operation
+            IRem | FRem | DRem | LRem => {
+                let left = stack.pop_boxed()?;
+                let right = stack.pop_boxed()?;
+                ast.push(AST::Operation(Operation {
+                    left,
+                    ty: OperationType::Remainder,
+                    right,
                 }))
             }
 

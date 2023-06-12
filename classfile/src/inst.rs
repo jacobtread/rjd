@@ -332,153 +332,474 @@ pub fn instruction(input: &[u8], wide: bool, pos: i32) -> IResult<&[u8], Instruc
     Ok((input, instr))
 }
 
+/// Local variable indexes are stored as u16 rather than
+/// u8 in order to account for wide instructions
+type LocalVariableIndex = u16;
+
+#[derive(Debug, Clone)]
+pub struct IIncData {
+    /// The index of the local variable
+    pub index: LocalVariableIndex,
+    /// The value to add to the variable
+    pub value: i16,
+}
+
+#[derive(Debug, Clone)]
+pub struct MultiANewArrayData {
+    /// The index of the array object type in the constant pool
+    pub index: PoolIndex,
+    /// The number of dimensions the array has
+    pub dimension: u8,
+}
+
 #[derive(Debug, Clone)]
 pub enum Instruction {
-    SALoad,
-    TableSwitch(TableSwitchData),
-    Swap,
-    SAStore,
-    BIPush(i8),
-    SIPush(i16),
-    NewArray(ArrayType),
-    Pop2,
-    IConst(i32),
-    FConst(f32),
-    DConst(f64),
-    LConst(i64),
-    IAdd,
-    FAdd,
-    InvokeSpecial(PoolIndex),
-    InvokeStatic(PoolIndex),
-    InvokeVirtual(PoolIndex),
-    InvokeInterface(PoolIndex),
-    PutField(PoolIndex),
-    GetField(PoolIndex),
-    PutStatic(PoolIndex),
-    Return,
-    Dup,
-    DupX1,
-    DupX2,
-    Dup2,
-    Dup2X1,
-    Dup2X2,
-    Pop,
-    DAdd,
-    DDiv,
-    D2i,
-    D2f,
-    D2l,
-    AReturn,
-    CheckCast(PoolIndex),
-    F2i,
-    AConstNull,
-    LoadConst(PoolIndex),
-    DCmpL,
-    DCmpG,
-    ArrayLength,
-    AThrow,
-    DALoad,
-    CALoad,
-    BALoad,
+    /// Load reference from array
+    /// [..., arrayref, index → ..., value]
     AALoad,
-    FALoad,
-    DAStore,
-    CAStore,
-    BAStore,
+    /// Store into reference array
+    /// [..., arrayref, index, value → ...]
     AAStore,
-    FAStore,
+    /// Push null
+    /// [... → ..., null]
+    AConstNull,
+    /// Load reference from local variable
+    /// [... → ..., objectref]
+    ALoad(LocalVariableIndex),
+    /// Create new array of reference  
+    /// [..., count → ..., arrayref]
     ANewArray(PoolIndex),
+    /// Return reference from method
+    /// [..., objectref → [empty]]
+    AReturn,
+    /// Get length of array
+    /// [..., arrayref → ..., length]
+    ArrayLength,
+    /// Store reference into local variable
+    /// [..., objectref → ...]
+    AStore(LocalVariableIndex),
+    /// Throw exception or error
+    /// [..., objectref → objectref]
+    AThrow,
+    /// Load byte or boolean from array
+    /// [..., arrayref, index → ..., value]
+    BALoad,
+    /// Store into byte or boolean array
+    /// [..., arrayref, index, value → ...]
+    BAStore,
+    /// Push byte
+    /// [... → ..., value]
+    BIPush(i8),
+    /// Load char from array
+    /// [..., arrayref, index → ..., value]
+    CALoad,
+    /// Store into char array
+    /// [..., arrayref, index, value → ...]
+    CAStore,
+    /// Check whether object is of given type
+    /// [..., objectref → ..., objectref]
+    CheckCast(PoolIndex),
+    /// Convert double to float
+    /// [..., value → ..., result]
+    D2f,
+    /// Convert double to int
+    /// [..., value → ..., result]
+    D2i,
+    /// Convert double to long
+    /// [..., value → ..., result]
+    D2l,
+    /// Add double
+    /// [..., value1, value2 → ..., result]
+    DAdd,
+    /// Load double from array
+    /// [..., arrayref, index → ..., value]
+    DALoad,
+    /// Store into double array
+    /// [..., arrayref, index, value → ...]
+    DAStore,
+    /// Compare double
+    /// [..., value1, value2 → ..., result]
+    DCmpG,
+    /// Compare double
+    /// [..., value1, value2 → ..., result]
+    DCmpL,
+    /// Push double
+    /// [... → ..., <d>]
+    DConst(f64),
+    /// Divide double  
+    /// [..., value1, value2 → ..., result]
+    DDiv,
+    /// Load double from local variable
+    /// [... → ..., value]
+    DLoad(LocalVariableIndex),
+    /// Multiply double
+    /// [..., value1, value2 → ..., result]
     DMul,
+    /// Negate double
+    /// [..., value → ..., result]
     DNeg,
+    /// Remainder double
+    /// [..., value1, value2 → ..., result]
     DRem,
+    /// Return double from method
+    /// [..., value → [empty]]
     DReturn,
-    FSub,
-    FMul,
-    FNeg,
-    FRem,
-    FReturn,
-    FCmpL,
-    FCmpG,
+    /// Store double into local variable
+    /// [..., value → ...]
+    DStore(LocalVariableIndex),
+    /// Subtract double
+    /// [..., value1, value2 → ..., result]
     DSub,
-    FDiv,
-    GetStatic(PoolIndex),
-    F2l,
+    /// Duplicate the top operand stack value
+    /// [..., value → ..., value, value]
+    Dup,
+    /// Duplicate the top operand stack value and insert two values down
+    /// [..., value2, value1 → ..., value1, value2, value1]
+    DupX1,
+    /// Duplicate the top operand stack value and insert two or three values down
+    /// 1: [..., value3, value2, value1 → ..., value1, value3, value2, value1]
+    /// 2: [..., value2, value1 → ..., ..., value1, value2, value1]
+    DupX2,
+    /// Duplicate the top one or two operand stack values
+    /// 1. [..., value2, value1 → ..., value2, value1, value2, value1]
+    /// 2. [..., value → ..., value, value]
+    Dup2,
+    /// Duplicate the top one or two operand stack values and insert two or three values down
+    /// 1. [..., value3, value2, value1 → ..., value2, value1, value3, value2, value1]
+    /// 2. [..., value2, value1 → ..., value1, value2, value1]
+    Dup2X1,
+    /// Duplicate the top one or two operand stack values and insert two, three, or four values down
+    /// 1. [..., value4, value3, value2, value1 → ..., value2, value1, value4, value3, value2, value1]
+    /// 2. [..., value3, value2, value1 → ..., value1, value3, value2, value1]
+    /// 3. [..., value3, value2, value1 → ..., value2, value1, value3, value2, value1]
+    /// 4. [..., value2, value1 → ..., value1, value2, value1]
+    Dup2X2,
+    /// Convert float to double
+    /// [..., value → ..., result]
     F2d,
-    I2l,
-    I2d,
-    I2s,
-    I2c,
-    I2b,
-    I2f,
-    IALoad,
-    IAStore,
-    IMul,
-    IDiv,
-    IAnd,
-    INeg,
-    InstanceOf(PoolIndex),
-    L2i,
-    L2d,
-    L2f,
-    LALoad,
-    LAStore,
-    LAdd,
-    LAnd,
-    LOr,
-    LXOr,
-    LSub,
-    LMul,
-    LDiv,
-    ISub,
-    IRem,
-    LNeg,
-    IShL,
-    IShR,
-    IUShR,
-    IOr,
-    IXOr,
-    LCmp,
-    IReturn,
-    LReturn,
-    LRem,
-    LShL,
-    LShR,
-    LUShR,
-    LookupSwitch(LookupSwitchData),
-    Nop,
-    MonitorEnter,
-    MonitorExit,
-    MultiANewArray { index: u16, dimensions: u8 },
-    New(PoolIndex),
-    AStore(Index),
-    LStore(Index),
-    IStore(Index),
-    DStore(Index),
-    FStore(Index),
-    FLoad(Index),
-    ILoad(Index),
-    ALoad(Index),
-    DLoad(Index),
-    LLoad(Index),
-    IInc { index: u16, value: i16 },
-    InvokeDynamic(PoolIndex),
-    Ret(Index),
-    IfACmpEq(BranchIndex),
-    IfACmpNe(BranchIndex),
-    IfICmpEq(BranchIndex),
-    IfICmpNe(BranchIndex),
-    IfICmpLt(BranchIndex),
-    IfICmpGe(BranchIndex),
-    IfICmpGt(BranchIndex),
-    IfICmpLe(BranchIndex),
-    IfNull(BranchIndex),
-    IfNonNull(BranchIndex),
-    IfEq(BranchIndex),
-    IfNe(BranchIndex),
-    IfLt(BranchIndex),
-    IfGe(BranchIndex),
-    IfGt(BranchIndex),
-    IfLe(BranchIndex),
+    /// Convert float to int
+    /// [..., value → ..., result]
+    F2i,
+    /// Convert float to long
+    /// [..., value → ..., result]
+    F2l,
+    /// Add float
+    /// [..., value1, value2 → ..., result]
+    FAdd,
+    /// Load float from array
+    /// [..., arrayref, index → ..., value]
+    FALoad,
+    /// Store into float array
+    /// [..., arrayref, index, value → ...]
+    FAStore,
+    /// Compare float
+    /// [..., value1, value2 → ..., result]
+    FCmpL,
+    /// Compare float
+    /// [..., value1, value2 → ..., result]
+    FCmpG,
+    /// Push float
+    /// [... → ..., <f>]
+    FConst(f32),
+    /// Divide float
+    /// [..., value1, value2 → ..., result]
+    FDiv,
+    /// Load float from local variable
+    /// [... → ..., value]
+    FLoad(LocalVariableIndex),
+    /// Multiply float
+    /// [..., value1, value2 → ..., result]
+    FMul,
+    /// Negate float
+    /// [..., value → ..., result]
+    FNeg,
+    /// Remainder float
+    /// [..., value1, value2 → ..., result]
+    FRem,
+    /// Return float from method
+    /// [..., value → [empty]]
+    FReturn,
+    /// Store float into local variable
+    /// [..., value → ...]
+    FStore(LocalVariableIndex),
+    /// Subtract float
+    /// [..., value1, value2 → ..., result]
+    FSub,
+    /// Fetch field from object
+    /// [..., objectref → ..., value]
+    GetField(PoolIndex),
+    /// Get static field from class
+    /// [..., → ..., value]
+    GetStatic(PoolIndex),
+    /// Branch always
+    /// [... → ...]
     Goto(BranchIndex),
+    /// Convert int to byte
+    /// [..., value → ..., result]
+    I2b,
+    /// Convert int to char
+    /// [..., value → ..., result]
+    I2c,
+    /// Convert int to double
+    /// [..., value → ..., result]
+    I2d,
+    /// Convert int to float
+    /// [..., value → ..., result]
+    I2f,
+    /// Convert int to long
+    /// [..., value → ..., result]
+    I2l,
+    /// Convert int to short
+    /// [..., value → ..., result]
+    I2s,
+    /// Add int
+    /// [..., value1, value2 → ..., result]
+    IAdd,
+    /// Load int from array
+    /// [..., arrayref, index → ..., value]
+    IALoad,
+    /// Boolean AND int
+    /// [..., value1, value2 → ..., result]
+    IAnd,
+    /// Store into int array
+    /// [..., arrayref, index, value → ...]
+    IAStore,
+    /// Push int constant
+    /// [... → ..., <i>]
+    IConst(i32),
+    /// Divide int
+    /// [..., value1, value2 → ..., result]
+    IDiv,
+    /// Branch if reference comparison succeeds
+    /// [..., value1, value2 → ...]
+    IfACmpEq(BranchIndex),
+    /// Branch if reference comparison succeeds
+    /// [..., value1, value2 → ...]
+    IfACmpNe(BranchIndex),
+    /// Branch if int comparison succeeds
+    /// [..., value1, value2 → ...]
+    IfICmpEq(BranchIndex),
+    /// Branch if int comparison succeeds
+    /// [..., value1, value2 → ...]
+    IfICmpNe(BranchIndex),
+    /// Branch if int comparison succeeds
+    /// [..., value1, value2 → ...]
+    IfICmpLt(BranchIndex),
+    /// Branch if int comparison succeeds
+    /// [..., value1, value2 → ...]
+    IfICmpGe(BranchIndex),
+    /// Branch if int comparison succeeds
+    /// [..., value1, value2 → ...]
+    IfICmpGt(BranchIndex),
+    /// Branch if int comparison succeeds
+    /// [..., value1, value2 → ...]
+    IfICmpLe(BranchIndex),
+    /// Branch if int comparison with zero succeeds
+    /// [..., value → ...]
+    IfEq(BranchIndex),
+    /// Branch if int comparison with zero succeeds
+    /// [..., value → ...]
+    IfNe(BranchIndex),
+    /// Branch if int comparison with zero succeeds
+    /// [..., value → ...]
+    IfLt(BranchIndex),
+    /// Branch if int comparison with zero succeeds
+    /// [..., value → ...]
+    IfGe(BranchIndex),
+    /// Branch if int comparison with zero succeeds
+    /// [..., value → ...]
+    IfGt(BranchIndex),
+    /// Branch if int comparison with zero succeeds
+    /// [..., value → ...]
+    IfLe(BranchIndex),
+    /// Branch if reference not null
+    /// [..., value → ...]
+    IfNonNull(BranchIndex),
+    /// Branch if reference is null
+    /// [..., value → ...]
+    IfNull(BranchIndex),
+    /// Increment local variable by constant
+    /// [... → ...]
+    IInc(IIncData),
+    /// Load int from local variable
+    /// [... → ..., value]
+    ILoad(LocalVariableIndex),
+    /// Multiply int
+    /// [..., value1, value2 → ..., result]
+    IMul,
+    /// Negate int
+    /// [..., value → ..., result]
+    INeg,
+    /// Determine if object is of given type
+    /// [..., objectref → ..., result]
+    InstanceOf(PoolIndex),
+    /// Invoke dynamic method
+    /// [..., [arg1, [arg2 ...]] → ...]
+    InvokeDynamic(PoolIndex),
+    /// Invoke interface method
+    /// [..., objectref, [arg1, [arg2 ...]] → ...]
+    InvokeInterface(PoolIndex),
+    /// Invoke instance method; special handling for superclass, private, and instance initialization method invocations
+    /// [..., objectref, [arg1, [arg2 ...]] → ...]
+    InvokeSpecial(PoolIndex),
+    /// Invoke a class (static) method
+    /// [..., [arg1, [arg2 ...]] → ...]
+    InvokeStatic(PoolIndex),
+    /// Invoke instance method; dispatch based on class
+    /// [..., objectref, [arg1, [arg2 ...]] → ...]
+    InvokeVirtual(PoolIndex),
+    /// Boolean OR int
+    /// [..., value1, value2 → ..., result]
+    IOr,
+    /// Remainder int
+    /// [..., value1, value2 → ..., result]
+    IRem,
+    /// Return int from method
+    /// [..., value → [empty]]
+    IReturn,
+    /// Shift left int
+    /// [..., value1, value2 → ..., result]
+    IShL,
+    /// Arithmetic shift right int
+    /// [..., value1, value2 → ..., result]
+    IShR,
+    /// Store int into local variable
+    /// [..., value → ...]
+    IStore(LocalVariableIndex),
+    /// Subtract int
+    /// [..., value1, value2 → ..., result]
+    ISub,
+    /// Logical shift right int
+    /// [..., value1, value2 → ..., result]
+    IUShR,
+    /// Boolean XOR int
+    /// [..., value1, value2 → ..., result]
+    IXOr,
+    /// Jump subroutine
+    /// [... → .., address]
     JSr(BranchIndex),
+    /// Convert long to double
+    /// [..., value → ..., result]
+    L2d,
+    /// Convert long to float
+    /// [..., value → ..., result]
+    L2f,
+    /// Convert long to int
+    /// [..., value → ..., result]
+    L2i,
+    /// Add long
+    /// [..., value1, value2 → ..., result]
+    LAdd,
+    /// Load long from array
+    /// [..., arrayref, index → ..., value]
+    LALoad,
+    /// Boolean AND long
+    /// [..., value1, value2 → ..., result]
+    LAnd,
+    /// Store into long array
+    /// [..., arrayref, index, value → ...]
+    LAStore,
+    /// Compare long
+    /// [..., value1, value2 → ..., result]
+    LCmp,
+    /// Push long constant
+    /// [... → ..., <l>]
+    LConst(i64),
+    /// Push item from run-time constant pool
+    /// [... → ..., value]
+    LoadConst(PoolIndex),
+    /// Divide long
+    /// [..., value1, value2 → ..., result]
+    LDiv,
+    /// Load long from local variable
+    /// [... → ..., value]
+    LLoad(LocalVariableIndex),
+    /// Multiply long
+    /// [..., value1, value2 → ..., result]
+    LMul,
+    /// Negate long
+    /// [..., value → ..., result]
+    LNeg,
+    /// Access jump table by key match and jump
+    /// [..., key → ...]
+    LookupSwitch(LookupSwitchData),
+    /// Boolean OR long
+    /// [..., value1, value2 → ..., result]
+    LOr,
+    /// Remainder long
+    /// [..., value1, value2 → ..., result]
+    LRem,
+    /// Return long from method
+    /// [..., value → [empty]]
+    LReturn,
+    /// Shift left long
+    /// [..., value1, value2 → ..., result]
+    LShL,
+    /// Arithmetic shift right long
+    /// [..., value1, value2 → ..., result]
+    LShR,
+    /// Store long into local variable
+    /// [..., value → ...]
+    LStore(LocalVariableIndex),
+    /// Subtract long
+    /// [..., value1, value2 → ..., result]
+    LSub,
+    /// Logical shift right long
+    /// [..., value1, value2 → ..., result]
+    LUShR,
+    /// Boolean XOR long
+    /// [..., value1, value2 → ..., result]
+    LXOr,
+    /// Enter monitor for object
+    /// [..., objectref → ...]
+    MonitorEnter,
+    /// Exit monitor for object
+    /// [..., objectref → ...]
+    MonitorExit,
+    /// Create new multidimensional array
+    /// [..., count1, [count2, ...] → ..., arrayref]
+    MultiANewArray(MultiANewArrayData),
+    /// Create new object
+    /// [... → ..., objectref]
+    New(PoolIndex),
+    /// Create new array
+    /// [..., count → ..., arrayref]
+    NewArray(ArrayType),
+    /// Do nothing
+    /// [... → ...]
+    Nop,
+    /// Pop the top operand stack value
+    /// [..., value → ...]
+    Pop,
+    /// Pop the top one or two operand stack values
+    /// 1. [..., value2, value1 → ...]
+    /// 2. [..., value → ...]
+    Pop2,
+    /// Set field in object
+    /// [..., objectref, value → ...]
+    PutField(PoolIndex),
+    /// Set static field in class
+    /// [..., value → ...]
+    PutStatic(PoolIndex),
+    /// Return from subroutine
+    /// [... → ...]
+    Ret(LocalVariableIndex),
+    /// Return void from method
+    /// [... → [empty]]
+    Return,
+    /// Load short from array
+    /// [..., arrayref, index → ..., value]
+    SALoad,
+    /// Store into short array
+    /// [..., arrayref, index, value → ...]
+    SAStore,
+    /// Push short
+    /// [... → ..., value]
+    SIPush(i16),
+    /// Swap the top two operand stack values
+    /// [..., value2, value1 → ..., value1, value2]
+    Swap,
+    /// Access jump table by index and jump
+    /// [..., index → ...]
+    TableSwitch(TableSwitchData),
 }

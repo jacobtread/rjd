@@ -303,6 +303,11 @@ impl<'a> Stack<'a> {
         self.inner.pop().ok_or(StackError::Empty)
     }
 
+    fn pop_discard(&mut self) -> StackResult<()> {
+        self.pop()?;
+        Ok(())
+    }
+
     fn pop_boxed(&mut self) -> StackResult<Box<StackItem<'a>>> {
         self.pop().map(Box::new)
     }
@@ -528,11 +533,12 @@ fn process<'a>(
     use classfile::inst::Instruction::*;
 
     match instruction {
+        // Swapping
         Swap => stack.swap()?,
 
         // Popping
-        Pop2 => todo!(),
-        Pop => todo!(),
+        Pop => stack.pop_discard()?,
+        Pop2 => stack.pop2()?,
 
         // Cast checking
         CheckCast(_) => todo!(),

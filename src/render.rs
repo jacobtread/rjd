@@ -5,7 +5,7 @@ use classfile::{
     class::{AccessFlags, ClassFile},
 };
 
-use crate::ast::generate_ast;
+use crate::gen::create_blocks;
 
 struct JavaClassRenderer<'a> {
     class: ClassFile<'a>,
@@ -149,7 +149,7 @@ impl Display for JavaClassRenderer<'_> {
                 method_flags_fmt(&method.access_flags, f)?;
                 write!(
                     f,
-                    "{} {} () {{}}",
+                    "{} {} () {{",
                     &method.descriptor.return_type, &method.name
                 )?;
                 f.write_char('\n')?;
@@ -160,13 +160,16 @@ impl Display for JavaClassRenderer<'_> {
                 });
 
                 if let Some(code) = code {
-                    let ast = generate_ast(code, &class.constant_pool).unwrap();
+                    let blocks = create_blocks(&code.code);
 
-                    write!(f, "{:#?}", ast)?;
+                    for (_pos, block) in blocks {
+                        let result = block.decompile(&class.constant_pool);
+                        write!(f, "\nBlock{{\n{:#?}\n}}", result)?;
+                    }
 
                     f.write_char('\n')?;
                 }
-                f.write_char('}')?;
+                f.write_str("  }\n\n")?;
             }
 
             f.write_char('\n')?;

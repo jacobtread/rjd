@@ -124,12 +124,103 @@ fn constant_value(input: &[u8]) -> IResult<&[u8], Attribute> {
 pub struct Code {
     pub max_stack: u16,
     pub max_locals: u16,
-    pub code: Vec<(i32, Instruction)>,
+    pub code: InstructionSet,
     pub exception_table: Vec<CodeException>,
     pub attributes: Vec<Attribute>,
 }
 
-fn code_bytes(input: &[u8]) -> IResult<&[u8], Vec<(i32, Instruction)>> {
+type CodeOffset = usize;
+
+#[derive(Debug, Clone)]
+pub struct InstructionSet {
+    pub inner: Vec<(CodeOffset, Instruction)>,
+}
+
+#[derive(Debug)]
+pub struct BorrowedInstrSet<'set> {
+    pub inner: &'set [(CodeOffset, Instruction)],
+}
+
+impl InstructionSet {
+    pub fn split_jumps(&self) -> Vec<BorrowedInstrSet<'_>> {
+        // Collects all the jump instructions (Conditional and Goto)
+        let mut jumps = Vec::new();
+        self.inner
+            .iter()
+            .enumerate()
+            .for_each(|(index, (_offset, instr))| {
+                use crate::inst::Instruction::*;
+
+                // TODO: Error handling instead of unwraps
+                match instr {
+                    IfNe(branch) | IfEq(branch) | IfLe(branch) | IfGe(branch) | IfGt(branch)
+                    | IfLt(branch) | IfICmpEq(branch) | IfICmpNe(branch) | IfICmpGt(branch)
+                    | IfICmpGe(branch) | IfICmpLt(branch) | IfICmpLe(branch) => {
+                        let true_pos = self.index_of_position(*branch as usize).unwrap();
+                        let false_pos = index + 1;
+                        jumps.push(true_pos);
+                        jumps.push(false_pos);
+                    }
+                    Goto(branch) => {
+                        let jump = self.index_of_position(*branch as usize).unwrap();
+                        jumps.push(jump);
+                    }
+                    _ => {}
+                }
+            });
+
+        // Sort and remove duplicates
+        jumps.sort();
+        jumps.dedup();
+
+        let mut out: Vec<BorrowedInstrSet<'_>> = Vec::new();
+
+        if jumps.is_empty() {
+            return out;
+        }
+
+        // Remove jump to first instruction
+        if jumps[0] == 0 {
+            jumps.remove(0);
+        }
+
+        // Remove end jumping to end
+        {
+            let last = *jumps.last().unwrap();
+            if last == self.inner.len() {
+                jumps.pop();
+            }
+        }
+
+        let mut slice: &[(usize, Instruction)] = &self.inner;
+        let jumps_len = jumps.len();
+
+        for i in 0..jumps_len {
+            let index = jumps[i] - if i == 0 { 0 } else { jumps[i - 1] };
+            let (first, second) = slice.split_at(index);
+
+            out.push(BorrowedInstrSet { inner: first });
+
+            if i + 1 == jumps_len {
+                out.push(BorrowedInstrSet { inner: second });
+                break;
+            }
+
+            slice = second;
+        }
+
+        out
+    }
+
+    pub fn index_of_position(&self, position: usize) -> Option<usize> {
+        self.inner
+            .iter()
+            .enumerate()
+            .find_map(|(index, (pos, _))| if *pos == position { Some(index) } else { None })
+    }
+}
+
+fn code_bytes(input: &[u8]) -> IResult<&[u8], InstructionSet> {
     let mut input = input;
     let mut last_length = input.len();
     let mut pos = 0;
@@ -137,7 +228,7 @@ fn code_bytes(input: &[u8]) -> IResult<&[u8], Vec<(i32, Instruction)>> {
     let mut instructions = Vec::new();
 
     while last_length > 0 {
-        let (i, instruction) = instruction(input, false, pos)?;
+        let (i, instruction) = instruction(input, false, pos as i32)?;
 
         instructions.push((pos, instruction));
 
@@ -147,10 +238,14 @@ fn code_bytes(input: &[u8]) -> IResult<&[u8], Vec<(i32, Instruction)>> {
 
         input = i;
         last_length = new_length;
-        pos += diff as i32;
+        pos += diff;
     }
 
-    Ok((input, instructions))
+    let set = InstructionSet {
+        inner: instructions,
+    };
+
+    Ok((input, set))
 }
 
 #[derive(Debug)]

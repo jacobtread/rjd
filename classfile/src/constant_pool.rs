@@ -114,6 +114,13 @@ impl<'a> ConstantPool<'a> {
             name_and_type,
         })
     }
+
+    pub fn get_invokedynamic(&self, index: PoolIndex) -> Option<InvokeDynamic> {
+        match self.get(index) {
+            Some(ConstantItem::InvokeDynamic(value)) => Some(value.clone()),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -325,7 +332,7 @@ pub struct MethodType {
     pub descriptor: MethodDescriptorIndex,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct InvokeDynamic {
     pub bootstrap_method_attr_index: u16,
     pub name_and_type: NameAndTypeIndex,

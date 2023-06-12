@@ -1,11 +1,10 @@
+use core::panic;
+
 use classfile::{
     attributes::Code,
-    class::Method,
-    constant_pool::{
-        ClassItem, ConstantItem, ConstantPool, Fieldref, MethodNameAndType, Methodref, PoolIndex,
-    },
+    constant_pool::{ConstantItem, ConstantPool, Fieldref, InvokeDynamic, Methodref, PoolIndex},
     inst::{ArrayType, Instruction, LookupSwitchData, TableSwitchData},
-    types::{Class, FieldDesc, MethodDescriptor},
+    types::{Class, FieldDesc},
 };
 use thiserror::Error;
 
@@ -14,8 +13,6 @@ pub enum AST<'a> {
     Value(Value<'a>),
     /// Operation on two different AST items
     Operation(Operation<'a>),
-    /// Negated value -1
-    Negated(Box<AST<'a>>),
 
     /// Increment local var at index by value (index, value)
     Increment(u16, i16),
@@ -50,6 +47,8 @@ pub enum AST<'a> {
 
     Jsr(u16),
     Ret(u16),
+
+    InvokeDynamic(InvokeDynamic),
 
     Other(Instruction),
 }
@@ -445,7 +444,7 @@ impl<'a> Stack<'a> {
     }
 }
 
-fn pinstr<'a, 'b: 'a>(
+pub fn pinstr<'a, 'b: 'a>(
     instr: &'b Instruction,
     pool: &'b ConstantPool<'a>,
     stack: &mut Stack<'a>,
@@ -771,10 +770,18 @@ fn pinstr<'a, 'b: 'a>(
             }))
         }
 
-        // Negated value !value
+        // Negated value -value
         INeg | FNeg | DNeg | LNeg => {
-            let value = stack.pop_boxed()?;
-            stack.push(AST::Negated(value))
+            let value = stack.pop_value()?;
+            let new_value: Value = match value {
+                Value::Integer(value) => Value::Integer(-value),
+                Value::Float(value) => Value::Float(-value),
+                Value::Double(value) => Value::Double(-value),
+                Value::Long(value) => Value::Long(-value),
+                _ => panic!("Unexpected value type TODO: HAndle"),
+            };
+
+            stack.push(AST::Value(new_value))
         }
 
         // a == b int/ref compare equal with jump
@@ -962,7 +969,10 @@ fn pinstr<'a, 'b: 'a>(
 
         // Ignored stack behavior
         CheckCast(_) => {}
-        ArrayLength => todo!(),
+        ArrayLength => {
+            let reference = stack.pop_boxed();
+            stack.push(AST::Value(Value::Integer(0)))
+        }
         AThrow => {
             // Should be the exception
             let thrown = stack.pop_value()?;
@@ -1038,7 +1048,9 @@ fn pinstr<'a, 'b: 'a>(
         }
 
         InvokeDynamic(index) => {
-            todo!("uhhh yeah");
+            // TODO: Error handling
+            let dynamic = pool.get_invokedynamic(*index).unwrap();
+            ast.push(AST::InvokeDynamic(dynamic))
         }
 
         // Ignored instructions
@@ -1050,28 +1062,4 @@ fn pinstr<'a, 'b: 'a>(
     }
 
     Ok(())
-}
-
-pub fn generate_ast<'a, 'b: 'a>(
-    code: &'b Code,
-    pool: &'b ConstantPool<'a>,
-) -> Result<Vec<AST<'a>>, InstrError> {
-    let mut stack: Stack<'a> = Stack::default();
-    let mut ast: Vec<AST> = Vec::new();
-
-    let mut iter = code.code.iter();
-
-    for (_pos, instr) in iter.by_ref() {
-        if let Err(err) = pinstr(instr, pool, &mut stack, &mut ast) {
-            eprintln!("ERR: {:?}", err);
-            ast.push(AST::Other(instr.clone()));
-            break;
-        }
-    }
-
-    for (_pos, instr) in iter {
-        ast.push(AST::Other(instr.clone()))
-    }
-
-    Ok(ast)
 }

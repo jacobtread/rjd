@@ -176,6 +176,8 @@ impl InstructionSet {
         let mut out: Vec<BorrowedInstrSet<'_>> = Vec::new();
 
         if jumps.is_empty() {
+            // No jumps means the entire set is used
+            out.push(BorrowedInstrSet { inner: &self.inner });
             return out;
         }
 
@@ -184,16 +186,17 @@ impl InstructionSet {
             jumps.remove(0);
         }
 
+        let jumps_len = jumps.len();
+
         // Remove end jumping to end
         {
-            let last = *jumps.last().unwrap();
+            let last = jumps[jumps_len - 1];
             if last == self.inner.len() {
                 jumps.pop();
             }
         }
 
         let mut slice: &[(usize, Instruction)] = &self.inner;
-        let jumps_len = jumps.len();
 
         for i in 0..jumps_len {
             let index = jumps[i] - if i == 0 { 0 } else { jumps[i - 1] };

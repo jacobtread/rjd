@@ -8,6 +8,7 @@ use classfile::{
 use crate::ast::{pinstr, InstrError, Stack, AST};
 
 /// Block of instructions
+#[derive(Debug)]
 pub struct Block<'set> {
     instructions: BorrowedInstrSet<'set>,
     branches: Vec<usize>,

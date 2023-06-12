@@ -512,11 +512,14 @@ pub fn pinstr<'a, 'b: 'a>(
                 args,
             };
 
-            if let FieldDesc::Void = &call.method_ref.name_and_type.descriptor.return_type {
-                ast.push(AST::MethodCall(call))
-            } else {
-                stack.push(AST::MethodCall(call))
+            if !matches!(
+                &call.method_ref.name_and_type.descriptor.return_type,
+                FieldDesc::Void
+            ) {
+                stack.push(AST::MethodCall(call.clone()))
             }
+
+            ast.push(AST::MethodCall(call))
         }
 
         // Static method calls

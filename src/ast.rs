@@ -2,9 +2,38 @@ use classfile::{
     attributes::Code,
     constant_pool::{ConstantItem, ConstantPool, PoolIndex},
 };
+use thiserror::Error;
 
 pub enum AST<'a> {
+    /// Constant literals
+    Constant(Constant<'a>),
+    /// Operation on two different AST items
     Operation(Operation<'a>),
+    /// Negated value -1
+    Negated(Box<AST<'a>>),
+    /// Conditial statement
+    Condition(JumpCondition<'a>),
+}
+
+pub struct JumpCondition<'a> {
+    /// Left hand side of the condition
+    left: Box<AST<'a>>,
+    /// Right hand side of the condition
+    right: Box<AST<'a>>,
+    /// The actual condition
+    ty: ConditionType,
+    /// The position to jump to
+    jump_index: u16,
+}
+
+pub enum ConditionType {
+    Equal,
+    NotEqual,
+    GreaterThan,
+    GreaterThanOrEqual,
+    LessThan,
+    LessThanOrEqual,
+    Eq,
 }
 
 pub struct Operation<'a> {
@@ -22,10 +51,14 @@ pub enum Constant<'a> {
     Double(f64),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum InstrError {
+    #[error("Missing constant at index {0}")]
     MissingConstant(PoolIndex),
+    #[error("Unexpected constant pool type at index {0}")]
     UnexpectedConstantType(PoolIndex),
+    #[error(transparent)]
+    Stack(#[from] StackError),
 }
 
 impl<'a> Constant<'a> {
@@ -67,20 +100,18 @@ pub enum OperationType {
     Remainder,
 }
 
-pub enum StackItem<'a> {
-    Constant(Constant<'a>),
-}
-
 #[derive(Default)]
 pub struct Stack<'a> {
-    inner: Vec<StackItem<'a>>,
+    inner: Vec<AST<'a>>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum StackError {
     /// Stack was empty
+    #[error("Stack was empty")]
     Empty,
     /// Stack didn't have enough items to pop
+    #[error("Not enough items to pop from stack")]
     NotEnough {
         /// The length required
         required: usize,
@@ -92,15 +123,15 @@ pub enum StackError {
 type StackResult<T> = Result<T, StackError>;
 
 impl<'a> Stack<'a> {
-    fn push(&mut self, value: StackItem<'a>) {
+    fn push(&mut self, value: AST<'a>) {
         self.inner.push(value);
     }
 
-    fn pop(&mut self) -> StackResult<AST> {
+    fn pop(&mut self) -> StackResult<AST<'a>> {
         self.inner.pop().ok_or(StackError::Empty)
     }
 
-    fn pop_boxed(&mut self) -> StackResult<Box<AST>> {
+    fn pop_boxed(&mut self) -> StackResult<Box<AST<'a>>> {
         self.pop().map(Box::new)
     }
 
@@ -134,21 +165,21 @@ pub fn generate_ast<'a>(code: Code, pool: &ConstantPool<'a>) -> Result<(), Instr
             // Push constant onto the stack from the constant pool
             LoadConst(index) => {
                 let value = Constant::try_from_pool(*index, pool)?;
-                stack.push(StackItem::Constant(value))
+                stack.push(AST::Constant(value))
             }
 
             // Pushing constants
-            IConst(value) => stack.push(StackItem::Constant(Constant::Integer(*value))),
-            DConst(value) => stack.push(StackItem::Constant(Constant::Double(*value))),
-            FConst(value) => stack.push(StackItem::Constant(Constant::Float(*value))),
-            LConst(value) => stack.push(StackItem::Constant(Constant::Long(*value))),
-            AConstNull => stack.push(StackItem::Constant(Constant::Null)),
+            IConst(value) => stack.push(AST::Constant(Constant::Integer(*value))),
+            DConst(value) => stack.push(AST::Constant(Constant::Double(*value))),
+            FConst(value) => stack.push(AST::Constant(Constant::Float(*value))),
+            LConst(value) => stack.push(AST::Constant(Constant::Long(*value))),
+            AConstNull => stack.push(AST::Constant(Constant::Null)),
 
             // * Multiply operation
             IMul | FMul | DMul | LMul => {
                 let left = stack.pop_boxed()?;
                 let right = stack.pop_boxed()?;
-                ast.push(AST::Operation(Operation {
+                stack.push(AST::Operation(Operation {
                     left,
                     ty: OperationType::Muliply,
                     right,
@@ -159,7 +190,7 @@ pub fn generate_ast<'a>(code: Code, pool: &ConstantPool<'a>) -> Result<(), Instr
             IDiv | FDiv | DDiv | LDiv => {
                 let left = stack.pop_boxed()?;
                 let right = stack.pop_boxed()?;
-                ast.push(AST::Operation(Operation {
+                stack.push(AST::Operation(Operation {
                     left,
                     ty: OperationType::Divide,
                     right,
@@ -170,7 +201,7 @@ pub fn generate_ast<'a>(code: Code, pool: &ConstantPool<'a>) -> Result<(), Instr
             IAdd | FAdd | DAdd | LAdd => {
                 let left = stack.pop_boxed()?;
                 let right = stack.pop_boxed()?;
-                ast.push(AST::Operation(Operation {
+                stack.push(AST::Operation(Operation {
                     left,
                     ty: OperationType::Add,
                     right,
@@ -181,7 +212,7 @@ pub fn generate_ast<'a>(code: Code, pool: &ConstantPool<'a>) -> Result<(), Instr
             ISub | FSub | DSub | LSub => {
                 let left = stack.pop_boxed()?;
                 let right = stack.pop_boxed()?;
-                ast.push(AST::Operation(Operation {
+                stack.push(AST::Operation(Operation {
                     left,
                     ty: OperationType::Subtract,
                     right,
@@ -192,10 +223,193 @@ pub fn generate_ast<'a>(code: Code, pool: &ConstantPool<'a>) -> Result<(), Instr
             IRem | FRem | DRem | LRem => {
                 let left = stack.pop_boxed()?;
                 let right = stack.pop_boxed()?;
-                ast.push(AST::Operation(Operation {
+                stack.push(AST::Operation(Operation {
                     left,
                     ty: OperationType::Remainder,
                     right,
+                }))
+            }
+
+            // < Less than comparison (float, double)
+            FCmpL | DCmpL => {
+                let left = stack.pop_boxed()?;
+                let right = stack.pop_boxed()?;
+                stack.push(AST::Operation(Operation {
+                    left,
+                    ty: OperationType::CompareLess,
+                    right,
+                }))
+            }
+
+            // > Less than comparison (float, double)
+            FCmpG | DCmpG => {
+                let left = stack.pop_boxed()?;
+                let right = stack.pop_boxed()?;
+                stack.push(AST::Operation(Operation {
+                    left,
+                    ty: OperationType::CompareGreater,
+                    right,
+                }))
+            }
+
+            // Signed compare on two longs
+            LCmp => {
+                let left = stack.pop_boxed()?;
+                let right = stack.pop_boxed()?;
+                stack.push(AST::Operation(Operation {
+                    left,
+                    ty: OperationType::SignedCompare,
+                    right,
+                }))
+            }
+
+            // & Bitwise AND operation
+            IAnd | LAnd => {
+                let left = stack.pop_boxed()?;
+                let right = stack.pop_boxed()?;
+                stack.push(AST::Operation(Operation {
+                    left,
+                    ty: OperationType::BitwiseAnd,
+                    right,
+                }))
+            }
+
+            // | Bitwise OR operation
+            IOr | LOr => {
+                let left = stack.pop_boxed()?;
+                let right = stack.pop_boxed()?;
+                stack.push(AST::Operation(Operation {
+                    left,
+                    ty: OperationType::BitwiseOr,
+                    right,
+                }))
+            }
+
+            // ^ XOR operation
+            IXOr | LXOr => {
+                let left = stack.pop_boxed()?;
+                let right = stack.pop_boxed()?;
+                stack.push(AST::Operation(Operation {
+                    left,
+                    ty: OperationType::Xor,
+                    right,
+                }))
+            }
+
+            // << Bitwise shift left operation
+            IShL | LShL => {
+                let left = stack.pop_boxed()?;
+                let right = stack.pop_boxed()?;
+                stack.push(AST::Operation(Operation {
+                    left,
+                    ty: OperationType::BitwiseShl,
+                    right,
+                }))
+            }
+
+            // >> Bitwise shift right operation
+            IShR | LShR => {
+                let left = stack.pop_boxed()?;
+                let right = stack.pop_boxed()?;
+                stack.push(AST::Operation(Operation {
+                    left,
+                    ty: OperationType::BitwiseShr,
+                    right,
+                }))
+            }
+
+            // >>> Logical shift right operation
+            IUShR | LUShR => {
+                let left = stack.pop_boxed()?;
+                let right = stack.pop_boxed()?;
+                stack.push(AST::Operation(Operation {
+                    left,
+                    ty: OperationType::LogicalShr,
+                    right,
+                }))
+            }
+
+            // Negated value !value
+            INeg | FNeg | DNeg | LNeg => {
+                let value = stack.pop_boxed()?;
+                stack.push(AST::Negated(value))
+            }
+
+            // a == b int/ref compare equal with jump
+            IfICmpEq(index) | IfACmpEq(index) => {
+                let left = stack.pop_boxed()?;
+                let right = stack.pop_boxed()?;
+
+                ast.push(AST::Condition(JumpCondition {
+                    left,
+                    right,
+                    ty: ConditionType::Equal,
+                    jump_index: *index,
+                }))
+            }
+
+            // a != b int/ref compare not equal with jump
+            IfICmpNe(index) | IfACmpNe(index) => {
+                let left = stack.pop_boxed()?;
+                let right = stack.pop_boxed()?;
+
+                ast.push(AST::Condition(JumpCondition {
+                    left,
+                    right,
+                    ty: ConditionType::NotEqual,
+                    jump_index: *index,
+                }))
+            }
+
+            // a > b int compare not equal with jump
+            IfICmpGt(index) => {
+                let left = stack.pop_boxed()?;
+                let right = stack.pop_boxed()?;
+
+                ast.push(AST::Condition(JumpCondition {
+                    left,
+                    right,
+                    ty: ConditionType::GreaterThan,
+                    jump_index: *index,
+                }))
+            }
+
+            // a >= b int compare not equal with jump
+            IfICmpGe(index) => {
+                let left = stack.pop_boxed()?;
+                let right = stack.pop_boxed()?;
+
+                ast.push(AST::Condition(JumpCondition {
+                    left,
+                    right,
+                    ty: ConditionType::GreaterThanOrEqual,
+                    jump_index: *index,
+                }))
+            }
+
+            // a < b int compare not equal with jump
+            IfICmpLt(index) => {
+                let left = stack.pop_boxed()?;
+                let right = stack.pop_boxed()?;
+
+                ast.push(AST::Condition(JumpCondition {
+                    left,
+                    right,
+                    ty: ConditionType::LessThan,
+                    jump_index: *index,
+                }))
+            }
+
+            // a <= b int compare not equal with jump
+            IfICmpLe(index) => {
+                let left = stack.pop_boxed()?;
+                let right = stack.pop_boxed()?;
+
+                ast.push(AST::Condition(JumpCondition {
+                    left,
+                    right,
+                    ty: ConditionType::LessThanOrEqual,
+                    jump_index: *index,
                 }))
             }
 

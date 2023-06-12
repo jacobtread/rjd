@@ -11,7 +11,7 @@ use std::fmt::Display;
 
 /// Parsed class type includes the package parts,
 /// class name and outer class names
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Class<'a> {
     pub class: &'a str,
     pub packages: Vec<&'a str>,
@@ -95,7 +95,7 @@ impl Display for FieldDesc<'_> {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub struct MethodDescriptor<'a> {
     pub parameters: Vec<FieldDesc<'a>>,
     /// Method return type (None indicating the void return type)

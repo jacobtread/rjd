@@ -9,7 +9,7 @@ use classfile::{
 };
 use thiserror::Error;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum AST<'a> {
     Value(Value<'a>),
     /// Operation on two different AST items
@@ -47,7 +47,7 @@ pub enum AST<'a> {
     Other(Instruction),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 
 pub struct ArrayStore<'a> {
     pub reference: Box<AST<'a>>,
@@ -55,37 +55,37 @@ pub struct ArrayStore<'a> {
     pub value: Box<AST<'a>>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ArrayLoad<'a> {
     pub reference: Box<AST<'a>>,
     pub index: Box<AST<'a>>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct PutField<'a> {
     pub field: Fieldref<'a>,
     pub value: Box<AST<'a>>,
     pub reference: Box<AST<'a>>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct GetField<'a> {
     pub field: Fieldref<'a>,
     pub reference: Box<AST<'a>>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct PutStatic<'a> {
     pub field: Fieldref<'a>,
     pub value: Box<AST<'a>>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct GetStatic<'a> {
     pub field: Fieldref<'a>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 
 pub struct MethodCall<'a> {
     pub method_ref: Methodref<'a>,
@@ -93,14 +93,14 @@ pub struct MethodCall<'a> {
     pub args: Vec<AST<'a>>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 
 pub struct StaticMethodCall<'a> {
     pub method_ref: Methodref<'a>,
     pub args: Vec<AST<'a>>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum LocalVariableType {
     Int,
     Long,
@@ -109,14 +109,14 @@ pub enum LocalVariableType {
     Reference,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 
 pub struct IntegerSwitch<'a> {
     pub key: Box<AST<'a>>,
     pub data: LookupSwitchData,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct JumpCondition<'a> {
     /// Left hand side of the condition
     pub left: Box<AST<'a>>,
@@ -128,7 +128,7 @@ pub struct JumpCondition<'a> {
     pub jump_index: u16,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum ConditionType {
     Equal,
     NotEqual,
@@ -138,14 +138,14 @@ pub enum ConditionType {
     LessThanOrEqual,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Operation<'a> {
     pub left: Box<AST<'a>>,
     pub ty: OperationType,
     pub right: Box<AST<'a>>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Value<'a> {
     Null,
     String(&'a str),
@@ -160,7 +160,7 @@ pub enum Value<'a> {
     Arrayref(Arrayref<'a>),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Arrayref<'a> {
     Primitive(PrimitiveArray<'a>),
     Reference(ReferenceArray<'a>),
@@ -202,18 +202,18 @@ impl<'a> Value<'a> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct PrimitiveArray<'a> {
     pub count: Box<AST<'a>>,
     pub ty: ArrayType,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ReferenceArray<'a> {
     pub count: Box<AST<'a>>,
     pub ty: Class<'a>,
 }
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct MultiReferenceArray<'a> {
     pub counts: Vec<AST<'a>>,
     pub ty: Class<'a>,
@@ -254,7 +254,7 @@ impl<'a> Value<'a> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum OperationType {
     Muliply,
     Divide,
@@ -304,6 +304,85 @@ impl<'a> Stack<'a> {
 
     fn pop(&mut self) -> StackResult<AST<'a>> {
         self.inner.pop().ok_or(StackError::Empty)
+    }
+
+    fn clone_last(&mut self) -> StackResult<AST<'a>> {
+        self.inner.last().cloned().ok_or(StackError::Empty)
+    }
+
+    fn dup(&mut self) -> StackResult<()> {
+        let value = self.clone_last()?;
+        self.push(value);
+        Ok(())
+    }
+
+    fn dup_x1(&mut self) -> StackResult<()> {
+        let value = self.clone_last()?;
+        // TODO: Bounds checking
+        self.inner.insert(self.inner.len() - 2, value);
+        Ok(())
+    }
+
+    fn dup_x2(&mut self) -> StackResult<()> {
+        let value = self.clone_last()?;
+        // TODO: Bounds checking
+        self.inner.insert(self.inner.len() - 3, value);
+        Ok(())
+    }
+
+    fn dup_2(&mut self) -> StackResult<()> {
+        let length = self.inner.len();
+        if length < 2 {
+            return Err(StackError::NotEnough {
+                required: 2,
+                length,
+            });
+        }
+
+        // TODO: Bounds checking
+        let a = self.inner[length - 1].clone();
+        let b = self.inner[length - 2].clone();
+
+        self.push(a);
+        self.push(b);
+        Ok(())
+    }
+
+    fn dup_2x1(&mut self) -> StackResult<()> {
+        let length = self.inner.len();
+        if length < 2 {
+            return Err(StackError::NotEnough {
+                required: 2,
+                length,
+            });
+        }
+
+        let a = self.inner[length - 1].clone();
+        let b = self.inner[length - 2].clone();
+
+        // TODO: Bounds checking
+        self.inner.insert(length - 2, a);
+        self.inner.insert(length - 3, b);
+
+        Ok(())
+    }
+
+    fn dup_2x2(&mut self) -> StackResult<()> {
+        let length = self.inner.len();
+        if length < 2 {
+            return Err(StackError::NotEnough {
+                required: 2,
+                length,
+            });
+        }
+
+        let a = self.inner[length - 1].clone();
+        let b = self.inner[length - 2].clone();
+
+        self.inner.insert(length - 3, a);
+        self.inner.insert(length - 4, b);
+
+        Ok(())
     }
 
     fn pop_value(&mut self) -> StackResult<Value<'a>> {
@@ -848,6 +927,13 @@ fn pinstr<'a, 'b: 'a>(
             let index = stack.pop_boxed()?;
             stack.push(AST::ArrayLoad(ArrayLoad { reference, index }))
         }
+
+        Dup => stack.dup()?,
+        DupX1 => stack.dup_x1()?,
+        DupX2 => stack.dup_x2()?,
+        Dup2 => stack.dup_2()?,
+        Dup2X1 => stack.dup_2x1()?,
+        Dup2X2 => stack.dup_2x2()?,
 
         value => ast.push(AST::Other(value.clone())),
     }

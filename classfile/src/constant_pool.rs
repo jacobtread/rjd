@@ -270,13 +270,13 @@ pub struct ClassItem {
     pub name_and_type: NameAndTypeIndex,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Methodref<'a> {
     pub class: Class<'a>,
     pub name_and_type: MethodNameAndType<'a>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Fieldref<'a> {
     pub class: Class<'a>,
     pub name_and_type: FieldNameAndType<'a>,
@@ -288,13 +288,13 @@ pub struct NameAndType {
     pub descriptor: Utf8Index,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct MethodNameAndType<'a> {
     pub name: &'a str,
     pub descriptor: MethodDescriptor<'a>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct FieldNameAndType<'a> {
     pub name: &'a str,
     pub descriptor: FieldDesc<'a>,

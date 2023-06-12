@@ -4,7 +4,7 @@ use classfile::{
     constant_pool::{
         ClassItem, ConstantItem, ConstantPool, Fieldref, MethodNameAndType, Methodref, PoolIndex,
     },
-    inst::{ArrayType, Instruction, LookupSwitchData},
+    inst::{ArrayType, Instruction, LookupSwitchData, TableSwitchData},
     types::{Class, FieldDesc, MethodDescriptor},
 };
 use thiserror::Error;
@@ -24,6 +24,7 @@ pub enum AST<'a> {
     Condition(JumpCondition<'a>),
     /// Integer switch
     IntegerSwitch(IntegerSwitch<'a>),
+    TableSwitch(TableSwitchImpl<'a>),
     /// Return with optional value
     Return(Option<Box<AST<'a>>>),
     /// Variable
@@ -43,6 +44,12 @@ pub enum AST<'a> {
 
     ArrayStore(ArrayStore<'a>),
     ArrayLoad(ArrayLoad<'a>),
+
+    Throw(Value<'a>),
+    InstanceOf(Class<'a>, Value<'a>),
+
+    Jsr(u16),
+    Ret(u16),
 
     Other(Instruction),
 }
@@ -117,6 +124,13 @@ pub struct IntegerSwitch<'a> {
 }
 
 #[derive(Debug, Clone)]
+
+pub struct TableSwitchImpl<'a> {
+    pub key: Box<AST<'a>>,
+    pub data: TableSwitchData,
+}
+
+#[derive(Debug, Clone)]
 pub struct JumpCondition<'a> {
     /// Left hand side of the condition
     pub left: Box<AST<'a>>,
@@ -156,6 +170,7 @@ pub enum Value<'a> {
     Short(i16),
     Char(char),
     Byte(u8),
+
     Objectref(Class<'a>),
     Arrayref(Arrayref<'a>),
 }
@@ -296,6 +311,8 @@ pub enum StackError {
 }
 
 type StackResult<T> = Result<T, StackError>;
+
+pub enum StackItem {}
 
 impl<'a> Stack<'a> {
     fn push(&mut self, value: AST<'a>) {
@@ -600,8 +617,6 @@ fn pinstr<'a, 'b: 'a>(
         }
         Pop2 => stack.pop2()?,
 
-        Nop => {}
-
         // * Multiply operation
         IMul | FMul | DMul | LMul => {
             let left = stack.pop_boxed()?;
@@ -881,6 +896,16 @@ fn pinstr<'a, 'b: 'a>(
             }))
         }
 
+        TableSwitch(data) => {
+            let key = stack.pop_boxed()?;
+            // key MUST be a int
+
+            ast.push(AST::TableSwitch(TableSwitchImpl {
+                key,
+                data: data.clone(),
+            }))
+        }
+
         // return value; Return with value
         AReturn | IReturn | FReturn | DReturn | LReturn => {
             let value = stack.pop_boxed()?;
@@ -935,7 +960,93 @@ fn pinstr<'a, 'b: 'a>(
         Dup2X1 => stack.dup_2x1()?,
         Dup2X2 => stack.dup_2x2()?,
 
-        value => ast.push(AST::Other(value.clone())),
+        // Ignored stack behavior
+        CheckCast(_) => {}
+        ArrayLength => todo!(),
+        AThrow => {
+            // Should be the exception
+            let thrown = stack.pop_value()?;
+            stack.push(AST::Value(thrown.clone()));
+            ast.push(AST::Throw(thrown))
+        }
+        InstanceOf(index) => {
+            let class = Class::try_parse(pool.get_class_name(*index).unwrap()).unwrap();
+            let value = stack.pop_value()?;
+            stack.push(AST::Value(Value::Integer(0)));
+            ast.push(AST::InstanceOf(class, value))
+        }
+
+        IfEq(index) => {
+            let left = stack.pop_boxed()?;
+            let right = Box::new(AST::Value(Value::Byte(0)));
+            ast.push(AST::Condition(JumpCondition {
+                left,
+                right,
+                ty: ConditionType::Equal,
+                jump_index: *index,
+            }))
+        }
+        IfNe(index) => {
+            let left = stack.pop_boxed()?;
+            let right = Box::new(AST::Value(Value::Byte(0)));
+            ast.push(AST::Condition(JumpCondition {
+                left,
+                right,
+                ty: ConditionType::NotEqual,
+                jump_index: *index,
+            }))
+        }
+        IfLt(index) => {
+            let left = stack.pop_boxed()?;
+            let right = Box::new(AST::Value(Value::Byte(0)));
+            ast.push(AST::Condition(JumpCondition {
+                left,
+                right,
+                ty: ConditionType::LessThan,
+                jump_index: *index,
+            }))
+        }
+        IfGe(index) => {
+            let left = stack.pop_boxed()?;
+            let right = Box::new(AST::Value(Value::Byte(0)));
+            ast.push(AST::Condition(JumpCondition {
+                left,
+                right,
+                ty: ConditionType::GreaterThanOrEqual,
+                jump_index: *index,
+            }))
+        }
+        IfGt(index) => {
+            let left = stack.pop_boxed()?;
+            let right = Box::new(AST::Value(Value::Byte(0)));
+            ast.push(AST::Condition(JumpCondition {
+                left,
+                right,
+                ty: ConditionType::GreaterThan,
+                jump_index: *index,
+            }))
+        }
+        IfLe(index) => {
+            let left = stack.pop_boxed()?;
+            let right = Box::new(AST::Value(Value::Byte(0)));
+            ast.push(AST::Condition(JumpCondition {
+                left,
+                right,
+                ty: ConditionType::LessThanOrEqual,
+                jump_index: *index,
+            }))
+        }
+
+        InvokeDynamic(index) => {
+            todo!("uhhh yeah");
+        }
+
+        // Ignored instructions
+        Goto(_) | Nop => {}
+        // TODO: Properly implement jsr
+        JSr(index) => stack.push(AST::Jsr(*index)),
+        // TODO: Properly implement Ret
+        Ret(index) => stack.push(AST::Jsr(*index)),
     }
 
     Ok(())

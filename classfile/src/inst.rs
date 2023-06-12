@@ -70,13 +70,21 @@ fn table_switch(input: &[u8], pos: i32) -> IResult<&[u8], Instruction> {
 
     Ok((
         input,
-        Instruction::TableSwitch {
+        Instruction::TableSwitch(TableSwitchData {
             default,
             low,
             high,
             offsets,
-        },
+        }),
     ))
+}
+
+#[derive(Debug, Clone)]
+pub struct TableSwitchData {
+    pub default: i32,
+    pub low: i32,
+    pub high: i32,
+    pub offsets: Vec<i32>,
 }
 
 fn lookup_switch(input: &[u8], pos: i32) -> IResult<&[u8], Instruction> {
@@ -327,12 +335,7 @@ pub fn instruction(input: &[u8], wide: bool, pos: i32) -> IResult<&[u8], Instruc
 #[derive(Debug, Clone)]
 pub enum Instruction {
     SALoad,
-    TableSwitch {
-        default: i32,
-        low: i32,
-        high: i32,
-        offsets: Vec<i32>,
-    },
+    TableSwitch(TableSwitchData),
     Swap,
     SAStore,
     BIPush(i8),
@@ -445,10 +448,7 @@ pub enum Instruction {
     Nop,
     MonitorEnter,
     MonitorExit,
-    MultiANewArray {
-        index: u16,
-        dimensions: u8,
-    },
+    MultiANewArray { index: u16, dimensions: u8 },
     New(PoolIndex),
     AStore(Index),
     LStore(Index),
@@ -460,10 +460,7 @@ pub enum Instruction {
     ALoad(Index),
     DLoad(Index),
     LLoad(Index),
-    IInc {
-        index: u16,
-        value: i16,
-    },
+    IInc { index: u16, value: i16 },
     InvokeDynamic(PoolIndex),
     Ret(Index),
     IfACmpEq(BranchIndex),

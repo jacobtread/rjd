@@ -2,7 +2,7 @@ use classfile::{
     attributes::Code,
     class::Method,
     constant_pool::{
-        ClassItem, ConstantItem, ConstantPool, MethodNameAndType, Methodref, PoolIndex,
+        ClassItem, ConstantItem, ConstantPool, Fieldref, MethodNameAndType, Methodref, PoolIndex,
     },
     inst::{ArrayType, Instruction, LookupSwitchData},
     types::{FieldDesc, MethodDescriptor},
@@ -25,11 +25,43 @@ pub enum AST<'a> {
     /// Variable
     LocalVariable(u16, LocalVariableType),
 
+    // Store a value in a local variable
+    SetLocalVariable(u16, Box<AST<'a>>),
+
     MethodCall(MethodCall<'a>),
 
     StaticMethodCall(StaticMethodCall<'a>),
 
+    PutField(PutField<'a>),
+    GetField(GetField<'a>),
+    PutStatic(PutStatic<'a>),
+    GetStatic(GetStatic<'a>),
+
     Other(Instruction),
+}
+
+#[derive(Debug)]
+pub struct PutField<'a> {
+    pub field: Fieldref<'a>,
+    pub value: Box<AST<'a>>,
+    pub reference: Box<AST<'a>>,
+}
+
+#[derive(Debug)]
+pub struct GetField<'a> {
+    pub field: Fieldref<'a>,
+    pub reference: Box<AST<'a>>,
+}
+
+#[derive(Debug)]
+pub struct PutStatic<'a> {
+    pub field: Fieldref<'a>,
+    pub value: Box<AST<'a>>,
+}
+
+#[derive(Debug)]
+pub struct GetStatic<'a> {
+    pub field: Fieldref<'a>,
 }
 
 #[derive(Debug)]
@@ -290,6 +322,52 @@ pub fn generate_ast<'a, 'b: 'a>(
             FLoad(index) => stack.push(AST::LocalVariable(*index, LocalVariableType::Float)),
             DLoad(index) => stack.push(AST::LocalVariable(*index, LocalVariableType::Double)),
             ALoad(index) => stack.push(AST::LocalVariable(*index, LocalVariableType::Reference)),
+            IStore(index) | LStore(index) | FStore(index) | DStore(index) | AStore(index) => {
+                let value = stack.pop_boxed()?;
+                ast.push(AST::SetLocalVariable(*index, value))
+            }
+
+            PutField(index) => {
+                // TODO: Handle these errors
+                let class_item = pool.get_fieldref(*index).unwrap();
+                let field = pool.get_fieldref_actual(class_item).unwrap();
+
+                let value = stack.pop_boxed()?;
+                let reference = stack.pop_boxed()?;
+
+                ast.push(AST::PutField(super::ast::PutField {
+                    field,
+                    value,
+                    reference,
+                }))
+            }
+
+            GetField(index) => {
+                // TODO: Handle these errors
+                let class_item = pool.get_fieldref(*index).unwrap();
+                let field = pool.get_fieldref_actual(class_item).unwrap();
+                let reference = stack.pop_boxed()?;
+
+                stack.push(AST::GetField(super::ast::GetField { field, reference }))
+            }
+
+            PutStatic(index) => {
+                // TODO: Handle these errors
+                let class_item = pool.get_fieldref(*index).unwrap();
+                let field = pool.get_fieldref_actual(class_item).unwrap();
+
+                let value = stack.pop_boxed()?;
+
+                ast.push(AST::PutStatic(super::ast::PutStatic { field, value }))
+            }
+
+            GetStatic(index) => {
+                // TODO: Handle these errors
+                let class_item = pool.get_fieldref(*index).unwrap();
+                let field = pool.get_fieldref_actual(class_item).unwrap();
+
+                stack.push(AST::GetStatic(super::ast::GetStatic { field }))
+            }
 
             // Push constant onto the stack from the constant pool
             LoadConst(index) => {

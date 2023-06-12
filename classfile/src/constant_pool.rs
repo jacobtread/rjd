@@ -105,6 +105,15 @@ impl<'a> ConstantPool<'a> {
             name_and_type,
         })
     }
+    pub fn get_fieldref_actual(&self, item: ClassItem) -> Option<Fieldref<'a>> {
+        let class: Class<'a> = Class::try_parse(self.get_class_name(item.class)?)?;
+        let name_and_type = self.get_name_and_type(item.name_and_type)?;
+        let name_and_type = self.get_field_name_and_type(name_and_type)?;
+        Some(Fieldref {
+            class,
+            name_and_type,
+        })
+    }
 }
 
 #[derive(Debug)]
@@ -265,6 +274,12 @@ pub struct ClassItem {
 pub struct Methodref<'a> {
     pub class: Class<'a>,
     pub name_and_type: MethodNameAndType<'a>,
+}
+
+#[derive(Debug)]
+pub struct Fieldref<'a> {
+    pub class: Class<'a>,
+    pub name_and_type: FieldNameAndType<'a>,
 }
 
 #[derive(Debug, Clone)]

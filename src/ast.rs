@@ -5,7 +5,7 @@ use classfile::{
         ClassItem, ConstantItem, ConstantPool, Fieldref, MethodNameAndType, Methodref, PoolIndex,
     },
     inst::{ArrayType, Instruction, LookupSwitchData},
-    types::{FieldDesc, MethodDescriptor},
+    types::{Class, FieldDesc, MethodDescriptor},
 };
 use thiserror::Error;
 
@@ -16,6 +16,10 @@ pub enum AST<'a> {
     Operation(Operation<'a>),
     /// Negated value -1
     Negated(Box<AST<'a>>),
+
+    /// Increment local var at index by value (index, value)
+    Increment(u16, i16),
+
     /// Conditial statement
     Condition(JumpCondition<'a>),
     /// Integer switch
@@ -37,7 +41,24 @@ pub enum AST<'a> {
     PutStatic(PutStatic<'a>),
     GetStatic(GetStatic<'a>),
 
+    ArrayStore(ArrayStore<'a>),
+    ArrayLoad(ArrayLoad<'a>),
+
     Other(Instruction),
+}
+
+#[derive(Debug)]
+
+pub struct ArrayStore<'a> {
+    pub reference: Box<AST<'a>>,
+    pub index: Box<AST<'a>>,
+    pub value: Box<AST<'a>>,
+}
+
+#[derive(Debug)]
+pub struct ArrayLoad<'a> {
+    pub reference: Box<AST<'a>>,
+    pub index: Box<AST<'a>>,
 }
 
 #[derive(Debug)]
@@ -133,12 +154,69 @@ pub enum Value<'a> {
     Long(i64),
     Double(f64),
     Short(i16),
+    Char(char),
+    Byte(u8),
+    Objectref(Class<'a>),
+    Arrayref(Arrayref<'a>),
+}
+
+#[derive(Debug)]
+pub enum Arrayref<'a> {
+    Primitive(PrimitiveArray<'a>),
+    Reference(ReferenceArray<'a>),
+    MultiReference(MultiReferenceArray<'a>),
+}
+
+impl<'a> Value<'a> {
+    fn cast(&self, target: FieldDesc<'a>) -> Result<Value<'a>, InstrError> {
+        Ok(match (self, target) {
+            // float/double/int => long
+            (Self::Float(value), FieldDesc::Long) => Value::Long(*value as i64),
+            (Self::Double(value), FieldDesc::Long) => Value::Long(*value as i64),
+            (Self::Integer(value), FieldDesc::Long) => Value::Long(*value as i64),
+
+            // float/int/long => double
+            (Self::Float(value), FieldDesc::Double) => Value::Double(*value as f64),
+            (Self::Integer(value), FieldDesc::Double) => Value::Double(*value as f64),
+            (Self::Long(value), FieldDesc::Double) => Value::Double(*value as f64),
+
+            // float/double/long => int
+            (Self::Float(value), FieldDesc::Int) => Value::Integer(*value as i32),
+            (Self::Double(value), FieldDesc::Int) => Value::Integer(*value as i32),
+            (Self::Long(value), FieldDesc::Int) => Value::Integer(*value as i32),
+
+            // int/double/long => float
+            (Self::Integer(value), FieldDesc::Float) => Value::Float(*value as f32),
+            (Self::Double(value), FieldDesc::Float) => Value::Float(*value as f32),
+            (Self::Long(value), FieldDesc::Float) => Value::Float(*value as f32),
+
+            // int => byte
+            (Self::Integer(value), FieldDesc::Byte) => Value::Byte(*value as u8),
+            // int => short
+            (Self::Integer(value), FieldDesc::Short) => Value::Short(*value as i16),
+            // int => char
+            (Self::Integer(value), FieldDesc::Char) => Value::Char((*value as u8) as char),
+
+            _ => return Err(InstrError::ImpossibleCast),
+        })
+    }
 }
 
 #[derive(Debug)]
 pub struct PrimitiveArray<'a> {
     pub count: Box<AST<'a>>,
     pub ty: ArrayType,
+}
+
+#[derive(Debug)]
+pub struct ReferenceArray<'a> {
+    pub count: Box<AST<'a>>,
+    pub ty: Class<'a>,
+}
+#[derive(Debug)]
+pub struct MultiReferenceArray<'a> {
+    pub counts: Vec<AST<'a>>,
+    pub ty: Class<'a>,
 }
 
 #[derive(Debug, Error)]
@@ -149,6 +227,9 @@ pub enum InstrError {
     UnexpectedConstantType(PoolIndex),
     #[error(transparent)]
     Stack(#[from] StackError),
+
+    #[error("Cannot cast between value types")]
+    ImpossibleCast,
 }
 
 impl<'a> Value<'a> {
@@ -209,6 +290,9 @@ pub enum StackError {
         /// The length remaining
         length: usize,
     },
+
+    #[error("Expected value on stack")]
+    ExpectedValue,
 }
 
 type StackResult<T> = Result<T, StackError>;
@@ -220,6 +304,22 @@ impl<'a> Stack<'a> {
 
     fn pop(&mut self) -> StackResult<AST<'a>> {
         self.inner.pop().ok_or(StackError::Empty)
+    }
+
+    fn pop_value(&mut self) -> StackResult<Value<'a>> {
+        match self.inner.pop() {
+            Some(AST::Value(value)) => Ok(value),
+            Some(_) => Err(StackError::ExpectedValue),
+            None => Err(StackError::Empty),
+        }
+    }
+
+    fn try_cast_value(&mut self, target: FieldDesc<'a>) -> StackResult<()> {
+        let value = self.pop_value()?;
+        // TODO: handle failed casts
+        let casted = value.cast(target).unwrap();
+        self.push(AST::Value(casted));
+        Ok(())
     }
 
     fn pop2(&mut self) -> StackResult<()> {
@@ -249,437 +349,531 @@ impl<'a> Stack<'a> {
     }
 }
 
-pub fn generate_ast<'a, 'b: 'a>(
-    code: &Code,
+fn pinstr<'a, 'b: 'a>(
+    instr: &'b Instruction,
     pool: &'b ConstantPool<'a>,
-) -> Result<Vec<AST<'a>>, InstrError> {
+    stack: &mut Stack<'a>,
+    ast: &mut Vec<AST<'a>>,
+) -> Result<(), InstrError> {
     use classfile::inst::Instruction::*;
 
+    match instr {
+        // Swap the top two stack items
+        Swap => {
+            stack.swap()?;
+        }
+
+        New(index) => {
+            // TODO: Handle errors
+            let class = Class::try_parse(pool.get_class_name(*index).unwrap()).unwrap();
+            stack.push(AST::Value(Value::Objectref(class)))
+        }
+
+        NewArray(array_type) => {
+            let count = stack.pop_boxed()?;
+            stack.push(AST::Value(Value::Arrayref(Arrayref::Primitive(
+                PrimitiveArray {
+                    count,
+                    ty: *array_type,
+                },
+            ))))
+        }
+
+        ANewArray(index) => {
+            let count = stack.pop_boxed()?;
+            let class = Class::try_parse(pool.get_class_name(*index).unwrap()).unwrap();
+            stack.push(AST::Value(Value::Arrayref(Arrayref::Reference(
+                ReferenceArray { count, ty: class },
+            ))))
+        }
+
+        MultiANewArray { index, dimensions } => {
+            let class = Class::try_parse(pool.get_class_name(*index).unwrap()).unwrap();
+            let mut counts = Vec::with_capacity(*dimensions as usize);
+            for _ in 0..*dimensions {
+                counts.push(stack.pop()?);
+            }
+            stack.push(AST::Value(Value::Arrayref(Arrayref::MultiReference(
+                MultiReferenceArray { counts, ty: class },
+            ))))
+        }
+
+        // Normal method calls
+        InvokeSpecial(index) | InvokeInterface(index) | InvokeVirtual(index) => {
+            // TODO: Handle these errors
+            let class_item = pool.get_methodref(*index).unwrap();
+            let methodref = pool.get_methodref_actual(class_item).unwrap();
+
+            let mut args = Vec::with_capacity(methodref.name_and_type.descriptor.parameters.len());
+            for _ in 0..args.len() {
+                args.push(stack.pop()?);
+            }
+            args.reverse();
+            let reference = stack.pop_boxed()?;
+
+            let call = MethodCall {
+                method_ref: methodref,
+                reference,
+                args,
+            };
+
+            if let FieldDesc::Void = &call.method_ref.name_and_type.descriptor.return_type {
+                ast.push(AST::MethodCall(call))
+            } else {
+                stack.push(AST::MethodCall(call))
+            }
+        }
+
+        // Static method calls
+        InvokeStatic(index) => {
+            // TODO: Handle these errors
+            let class_item = pool.get_methodref(*index).unwrap();
+            let methodref = pool.get_methodref_actual(class_item).unwrap();
+
+            let mut args = Vec::with_capacity(methodref.name_and_type.descriptor.parameters.len());
+            for _ in 0..args.len() {
+                args.push(stack.pop()?);
+            }
+            args.reverse();
+
+            let call = StaticMethodCall {
+                method_ref: methodref,
+                args,
+            };
+            if let FieldDesc::Void = &call.method_ref.name_and_type.descriptor.return_type {
+                ast.push(AST::StaticMethodCall(call))
+            } else {
+                stack.push(AST::StaticMethodCall(call))
+            }
+        }
+
+        // Local variable loads
+        ILoad(index) => stack.push(AST::LocalVariable(*index, LocalVariableType::Int)),
+        LLoad(index) => stack.push(AST::LocalVariable(*index, LocalVariableType::Long)),
+        FLoad(index) => stack.push(AST::LocalVariable(*index, LocalVariableType::Float)),
+        DLoad(index) => stack.push(AST::LocalVariable(*index, LocalVariableType::Double)),
+        ALoad(index) => stack.push(AST::LocalVariable(*index, LocalVariableType::Reference)),
+        IStore(index) | LStore(index) | FStore(index) | DStore(index) | AStore(index) => {
+            let value = stack.pop_boxed()?;
+            ast.push(AST::SetLocalVariable(*index, value))
+        }
+
+        PutField(index) => {
+            // TODO: Handle these errors
+            let class_item = pool.get_fieldref(*index).unwrap();
+            let field = pool.get_fieldref_actual(class_item).unwrap();
+
+            let value = stack.pop_boxed()?;
+            let reference = stack.pop_boxed()?;
+
+            ast.push(AST::PutField(super::ast::PutField {
+                field,
+                value,
+                reference,
+            }))
+        }
+
+        GetField(index) => {
+            // TODO: Handle these errors
+            let class_item = pool.get_fieldref(*index).unwrap();
+            let field = pool.get_fieldref_actual(class_item).unwrap();
+            let reference = stack.pop_boxed()?;
+
+            stack.push(AST::GetField(super::ast::GetField { field, reference }))
+        }
+
+        PutStatic(index) => {
+            // TODO: Handle these errors
+            let class_item = pool.get_fieldref(*index).unwrap();
+            let field = pool.get_fieldref_actual(class_item).unwrap();
+
+            let value = stack.pop_boxed()?;
+
+            ast.push(AST::PutStatic(super::ast::PutStatic { field, value }))
+        }
+
+        GetStatic(index) => {
+            // TODO: Handle these errors
+            let class_item = pool.get_fieldref(*index).unwrap();
+            let field = pool.get_fieldref_actual(class_item).unwrap();
+
+            stack.push(AST::GetStatic(super::ast::GetStatic { field }))
+        }
+
+        // Push constant onto the stack from the constant pool
+        LoadConst(index) => {
+            let value = Value::try_from_pool(*index, pool)?;
+            stack.push(AST::Value(value))
+        }
+
+        // Pushing constants
+        IConst(value) => stack.push(AST::Value(Value::Integer(*value))),
+        DConst(value) => stack.push(AST::Value(Value::Double(*value))),
+        FConst(value) => stack.push(AST::Value(Value::Float(*value))),
+        LConst(value) => stack.push(AST::Value(Value::Long(*value))),
+        AConstNull => stack.push(AST::Value(Value::Null)),
+
+        BIPush(value) => stack.push(AST::Value(Value::Integer(*value as i32))),
+        SIPush(value) => stack.push(AST::Value(Value::Short(*value))),
+
+        MonitorEnter | MonitorExit | Pop => {
+            stack.pop()?;
+        }
+        Pop2 => stack.pop2()?,
+
+        Nop => {}
+
+        // * Multiply operation
+        IMul | FMul | DMul | LMul => {
+            let left = stack.pop_boxed()?;
+            let right = stack.pop_boxed()?;
+            stack.push(AST::Operation(Operation {
+                left,
+                ty: OperationType::Muliply,
+                right,
+            }))
+        }
+
+        // / Divide operation
+        IDiv | FDiv | DDiv | LDiv => {
+            let left = stack.pop_boxed()?;
+            let right = stack.pop_boxed()?;
+            stack.push(AST::Operation(Operation {
+                left,
+                ty: OperationType::Divide,
+                right,
+            }))
+        }
+
+        // + Add operation
+        IAdd | FAdd | DAdd | LAdd => {
+            let left = stack.pop_boxed()?;
+            let right = stack.pop_boxed()?;
+            stack.push(AST::Operation(Operation {
+                left,
+                ty: OperationType::Add,
+                right,
+            }))
+        }
+
+        // - Subtract operation
+        ISub | FSub | DSub | LSub => {
+            let left = stack.pop_boxed()?;
+            let right = stack.pop_boxed()?;
+            stack.push(AST::Operation(Operation {
+                left,
+                ty: OperationType::Subtract,
+                right,
+            }))
+        }
+
+        // % Remainder operation
+        IRem | FRem | DRem | LRem => {
+            let left = stack.pop_boxed()?;
+            let right = stack.pop_boxed()?;
+            stack.push(AST::Operation(Operation {
+                left,
+                ty: OperationType::Remainder,
+                right,
+            }))
+        }
+
+        // < Less than comparison (float, double)
+        FCmpL | DCmpL => {
+            let left = stack.pop_boxed()?;
+            let right = stack.pop_boxed()?;
+            stack.push(AST::Operation(Operation {
+                left,
+                ty: OperationType::CompareLess,
+                right,
+            }))
+        }
+
+        // > Less than comparison (float, double)
+        FCmpG | DCmpG => {
+            let left = stack.pop_boxed()?;
+            let right = stack.pop_boxed()?;
+            stack.push(AST::Operation(Operation {
+                left,
+                ty: OperationType::CompareGreater,
+                right,
+            }))
+        }
+
+        // Signed compare on two longs
+        LCmp => {
+            let left = stack.pop_boxed()?;
+            let right = stack.pop_boxed()?;
+            stack.push(AST::Operation(Operation {
+                left,
+                ty: OperationType::SignedCompare,
+                right,
+            }))
+        }
+
+        // & Bitwise AND operation
+        IAnd | LAnd => {
+            let left = stack.pop_boxed()?;
+            let right = stack.pop_boxed()?;
+            stack.push(AST::Operation(Operation {
+                left,
+                ty: OperationType::BitwiseAnd,
+                right,
+            }))
+        }
+
+        // | Bitwise OR operation
+        IOr | LOr => {
+            let left = stack.pop_boxed()?;
+            let right = stack.pop_boxed()?;
+            stack.push(AST::Operation(Operation {
+                left,
+                ty: OperationType::BitwiseOr,
+                right,
+            }))
+        }
+
+        // ^ XOR operation
+        IXOr | LXOr => {
+            let left = stack.pop_boxed()?;
+            let right = stack.pop_boxed()?;
+            stack.push(AST::Operation(Operation {
+                left,
+                ty: OperationType::Xor,
+                right,
+            }))
+        }
+
+        // << Bitwise shift left operation
+        IShL | LShL => {
+            let left = stack.pop_boxed()?;
+            let right = stack.pop_boxed()?;
+            stack.push(AST::Operation(Operation {
+                left,
+                ty: OperationType::BitwiseShl,
+                right,
+            }))
+        }
+
+        // >> Bitwise shift right operation
+        IShR | LShR => {
+            let left = stack.pop_boxed()?;
+            let right = stack.pop_boxed()?;
+            stack.push(AST::Operation(Operation {
+                left,
+                ty: OperationType::BitwiseShr,
+                right,
+            }))
+        }
+
+        // >>> Logical shift right operation
+        IUShR | LUShR => {
+            let left = stack.pop_boxed()?;
+            let right = stack.pop_boxed()?;
+            stack.push(AST::Operation(Operation {
+                left,
+                ty: OperationType::LogicalShr,
+                right,
+            }))
+        }
+
+        // Negated value !value
+        INeg | FNeg | DNeg | LNeg => {
+            let value = stack.pop_boxed()?;
+            stack.push(AST::Negated(value))
+        }
+
+        // a == b int/ref compare equal with jump
+        IfICmpEq(index) | IfACmpEq(index) => {
+            let left = stack.pop_boxed()?;
+            let right = stack.pop_boxed()?;
+
+            ast.push(AST::Condition(JumpCondition {
+                left,
+                right,
+                ty: ConditionType::Equal,
+                jump_index: *index,
+            }))
+        }
+
+        // a != b int/ref compare not equal with jump
+        IfICmpNe(index) | IfACmpNe(index) => {
+            let left = stack.pop_boxed()?;
+            let right = stack.pop_boxed()?;
+
+            ast.push(AST::Condition(JumpCondition {
+                left,
+                right,
+                ty: ConditionType::NotEqual,
+                jump_index: *index,
+            }))
+        }
+
+        // a > b int compare not equal with jump
+        IfICmpGt(index) => {
+            let left = stack.pop_boxed()?;
+            let right = stack.pop_boxed()?;
+
+            ast.push(AST::Condition(JumpCondition {
+                left,
+                right,
+                ty: ConditionType::GreaterThan,
+                jump_index: *index,
+            }))
+        }
+
+        // a >= b int compare not equal with jump
+        IfICmpGe(index) => {
+            let left = stack.pop_boxed()?;
+            let right = stack.pop_boxed()?;
+
+            ast.push(AST::Condition(JumpCondition {
+                left,
+                right,
+                ty: ConditionType::GreaterThanOrEqual,
+                jump_index: *index,
+            }))
+        }
+
+        // a < b int compare not equal with jump
+        IfICmpLt(index) => {
+            let left = stack.pop_boxed()?;
+            let right = stack.pop_boxed()?;
+
+            ast.push(AST::Condition(JumpCondition {
+                left,
+                right,
+                ty: ConditionType::LessThan,
+                jump_index: *index,
+            }))
+        }
+
+        // a <= b int compare not equal with jump
+        IfICmpLe(index) => {
+            let left = stack.pop_boxed()?;
+            let right = stack.pop_boxed()?;
+
+            ast.push(AST::Condition(JumpCondition {
+                left,
+                right,
+                ty: ConditionType::LessThanOrEqual,
+                jump_index: *index,
+            }))
+        }
+
+        // value != null non null comparison
+        IfNonNull(index) => {
+            let left = stack.pop_boxed()?;
+            let right = Box::new(AST::Value(Value::Null));
+
+            // left MUST be a reference or null constant
+
+            ast.push(AST::Condition(JumpCondition {
+                left,
+                right,
+                ty: ConditionType::NotEqual,
+                jump_index: *index,
+            }))
+        }
+
+        // value == null null comparison
+        IfNull(index) => {
+            let left = stack.pop_boxed()?;
+            let right = Box::new(AST::Value(Value::Null));
+
+            // left MUST be a reference or null constant
+
+            ast.push(AST::Condition(JumpCondition {
+                left,
+                right,
+                ty: ConditionType::Equal,
+                jump_index: *index,
+            }))
+        }
+
+        // Integer lookup switch case
+        LookupSwitch(data) => {
+            let key = stack.pop_boxed()?;
+            // key MUST be a int
+
+            ast.push(AST::IntegerSwitch(IntegerSwitch {
+                key,
+                data: data.clone(),
+            }))
+        }
+
+        // return value; Return with value
+        AReturn | IReturn | FReturn | DReturn | LReturn => {
+            let value = stack.pop_boxed()?;
+            ast.push(AST::Return(Some(value)))
+        }
+
+        // return; Void return
+        Return => ast.push(AST::Return(None)),
+
+        IInc { index, value } => ast.push(AST::Increment(*index, *value)),
+
+        // (float/double/int) as long cast
+        F2l | D2l | I2l => stack.try_cast_value(FieldDesc::Long)?,
+
+        // (float/int/long) as double cast
+        F2d | I2d | L2d => stack.try_cast_value(FieldDesc::Double)?,
+
+        // (float/double/long) as int cast
+        F2i | D2i | L2i => stack.try_cast_value(FieldDesc::Int)?,
+
+        // (int/double/long) as float cast
+        I2f | D2f | L2f => stack.try_cast_value(FieldDesc::Float)?,
+
+        // int as byte cast
+        I2b => stack.try_cast_value(FieldDesc::Byte)?,
+        // int as short cast
+        I2s => stack.try_cast_value(FieldDesc::Short)?,
+        // int as char cast
+        I2c => stack.try_cast_value(FieldDesc::Char)?,
+
+        IAStore | LAStore | DAStore | CAStore | BAStore | AAStore | SAStore | FAStore => {
+            let reference = stack.pop_boxed()?;
+            let index = stack.pop_boxed()?;
+            let value = stack.pop_boxed()?;
+            ast.push(AST::ArrayStore(ArrayStore {
+                reference,
+                index,
+                value,
+            }))
+        }
+
+        IALoad | LALoad | DALoad | CALoad | BALoad | AALoad | SALoad | FALoad => {
+            let reference = stack.pop_boxed()?;
+            let index = stack.pop_boxed()?;
+            stack.push(AST::ArrayLoad(ArrayLoad { reference, index }))
+        }
+
+        value => ast.push(AST::Other(value.clone())),
+    }
+
+    Ok(())
+}
+
+pub fn generate_ast<'a, 'b: 'a>(
+    code: &'b Code,
+    pool: &'b ConstantPool<'a>,
+) -> Result<Vec<AST<'a>>, InstrError> {
     let mut stack: Stack<'a> = Stack::default();
     let mut ast: Vec<AST> = Vec::new();
 
-    for (_pos, instr) in &code.code {
-        match instr {
-            // Swap the top two stack items
-            Swap => {
-                stack.swap()?;
-            }
+    let mut iter = code.code.iter();
 
-            // Normal method calls
-            InvokeSpecial(index) | InvokeInterface(index) | InvokeVirtual(index) => {
-                // TODO: Handle these errors
-                let class_item = pool.get_methodref(*index).unwrap();
-                let methodref = pool.get_methodref_actual(class_item).unwrap();
-
-                let mut args =
-                    Vec::with_capacity(methodref.name_and_type.descriptor.parameters.len());
-                for _ in 0..args.len() {
-                    args.push(stack.pop()?);
-                }
-                args.reverse();
-                let reference = stack.pop_boxed()?;
-
-                let call = MethodCall {
-                    method_ref: methodref,
-                    reference,
-                    args,
-                };
-
-                if let FieldDesc::Void = &call.method_ref.name_and_type.descriptor.return_type {
-                    ast.push(AST::MethodCall(call))
-                } else {
-                    stack.push(AST::MethodCall(call))
-                }
-            }
-
-            // Static method calls
-            InvokeStatic(index) => {
-                // TODO: Handle these errors
-                let class_item = pool.get_methodref(*index).unwrap();
-                let methodref = pool.get_methodref_actual(class_item).unwrap();
-
-                let mut args =
-                    Vec::with_capacity(methodref.name_and_type.descriptor.parameters.len());
-                for _ in 0..args.len() {
-                    args.push(stack.pop()?);
-                }
-                args.reverse();
-
-                let call = StaticMethodCall {
-                    method_ref: methodref,
-                    args,
-                };
-                if let FieldDesc::Void = &call.method_ref.name_and_type.descriptor.return_type {
-                    ast.push(AST::StaticMethodCall(call))
-                } else {
-                    stack.push(AST::StaticMethodCall(call))
-                }
-            }
-
-            // Local variable loads
-            ILoad(index) => stack.push(AST::LocalVariable(*index, LocalVariableType::Int)),
-            LLoad(index) => stack.push(AST::LocalVariable(*index, LocalVariableType::Long)),
-            FLoad(index) => stack.push(AST::LocalVariable(*index, LocalVariableType::Float)),
-            DLoad(index) => stack.push(AST::LocalVariable(*index, LocalVariableType::Double)),
-            ALoad(index) => stack.push(AST::LocalVariable(*index, LocalVariableType::Reference)),
-            IStore(index) | LStore(index) | FStore(index) | DStore(index) | AStore(index) => {
-                let value = stack.pop_boxed()?;
-                ast.push(AST::SetLocalVariable(*index, value))
-            }
-
-            PutField(index) => {
-                // TODO: Handle these errors
-                let class_item = pool.get_fieldref(*index).unwrap();
-                let field = pool.get_fieldref_actual(class_item).unwrap();
-
-                let value = stack.pop_boxed()?;
-                let reference = stack.pop_boxed()?;
-
-                ast.push(AST::PutField(super::ast::PutField {
-                    field,
-                    value,
-                    reference,
-                }))
-            }
-
-            GetField(index) => {
-                // TODO: Handle these errors
-                let class_item = pool.get_fieldref(*index).unwrap();
-                let field = pool.get_fieldref_actual(class_item).unwrap();
-                let reference = stack.pop_boxed()?;
-
-                stack.push(AST::GetField(super::ast::GetField { field, reference }))
-            }
-
-            PutStatic(index) => {
-                // TODO: Handle these errors
-                let class_item = pool.get_fieldref(*index).unwrap();
-                let field = pool.get_fieldref_actual(class_item).unwrap();
-
-                let value = stack.pop_boxed()?;
-
-                ast.push(AST::PutStatic(super::ast::PutStatic { field, value }))
-            }
-
-            GetStatic(index) => {
-                // TODO: Handle these errors
-                let class_item = pool.get_fieldref(*index).unwrap();
-                let field = pool.get_fieldref_actual(class_item).unwrap();
-
-                stack.push(AST::GetStatic(super::ast::GetStatic { field }))
-            }
-
-            // Push constant onto the stack from the constant pool
-            LoadConst(index) => {
-                let value = Value::try_from_pool(*index, pool)?;
-                stack.push(AST::Value(value))
-            }
-
-            // Pushing constants
-            IConst(value) => stack.push(AST::Value(Value::Integer(*value))),
-            DConst(value) => stack.push(AST::Value(Value::Double(*value))),
-            FConst(value) => stack.push(AST::Value(Value::Float(*value))),
-            LConst(value) => stack.push(AST::Value(Value::Long(*value))),
-            AConstNull => stack.push(AST::Value(Value::Null)),
-
-            BIPush(value) => stack.push(AST::Value(Value::Integer(*value as i32))),
-            SIPush(value) => stack.push(AST::Value(Value::Short(*value))),
-
-            MonitorEnter | MonitorExit | Pop => {
-                stack.pop()?;
-            }
-            Pop2 => stack.pop2()?,
-
-            // * Multiply operation
-            IMul | FMul | DMul | LMul => {
-                let left = stack.pop_boxed()?;
-                let right = stack.pop_boxed()?;
-                stack.push(AST::Operation(Operation {
-                    left,
-                    ty: OperationType::Muliply,
-                    right,
-                }))
-            }
-
-            // / Divide operation
-            IDiv | FDiv | DDiv | LDiv => {
-                let left = stack.pop_boxed()?;
-                let right = stack.pop_boxed()?;
-                stack.push(AST::Operation(Operation {
-                    left,
-                    ty: OperationType::Divide,
-                    right,
-                }))
-            }
-
-            // + Add operation
-            IAdd | FAdd | DAdd | LAdd => {
-                let left = stack.pop_boxed()?;
-                let right = stack.pop_boxed()?;
-                stack.push(AST::Operation(Operation {
-                    left,
-                    ty: OperationType::Add,
-                    right,
-                }))
-            }
-
-            // - Subtract operation
-            ISub | FSub | DSub | LSub => {
-                let left = stack.pop_boxed()?;
-                let right = stack.pop_boxed()?;
-                stack.push(AST::Operation(Operation {
-                    left,
-                    ty: OperationType::Subtract,
-                    right,
-                }))
-            }
-
-            // % Remainder operation
-            IRem | FRem | DRem | LRem => {
-                let left = stack.pop_boxed()?;
-                let right = stack.pop_boxed()?;
-                stack.push(AST::Operation(Operation {
-                    left,
-                    ty: OperationType::Remainder,
-                    right,
-                }))
-            }
-
-            // < Less than comparison (float, double)
-            FCmpL | DCmpL => {
-                let left = stack.pop_boxed()?;
-                let right = stack.pop_boxed()?;
-                stack.push(AST::Operation(Operation {
-                    left,
-                    ty: OperationType::CompareLess,
-                    right,
-                }))
-            }
-
-            // > Less than comparison (float, double)
-            FCmpG | DCmpG => {
-                let left = stack.pop_boxed()?;
-                let right = stack.pop_boxed()?;
-                stack.push(AST::Operation(Operation {
-                    left,
-                    ty: OperationType::CompareGreater,
-                    right,
-                }))
-            }
-
-            // Signed compare on two longs
-            LCmp => {
-                let left = stack.pop_boxed()?;
-                let right = stack.pop_boxed()?;
-                stack.push(AST::Operation(Operation {
-                    left,
-                    ty: OperationType::SignedCompare,
-                    right,
-                }))
-            }
-
-            // & Bitwise AND operation
-            IAnd | LAnd => {
-                let left = stack.pop_boxed()?;
-                let right = stack.pop_boxed()?;
-                stack.push(AST::Operation(Operation {
-                    left,
-                    ty: OperationType::BitwiseAnd,
-                    right,
-                }))
-            }
-
-            // | Bitwise OR operation
-            IOr | LOr => {
-                let left = stack.pop_boxed()?;
-                let right = stack.pop_boxed()?;
-                stack.push(AST::Operation(Operation {
-                    left,
-                    ty: OperationType::BitwiseOr,
-                    right,
-                }))
-            }
-
-            // ^ XOR operation
-            IXOr | LXOr => {
-                let left = stack.pop_boxed()?;
-                let right = stack.pop_boxed()?;
-                stack.push(AST::Operation(Operation {
-                    left,
-                    ty: OperationType::Xor,
-                    right,
-                }))
-            }
-
-            // << Bitwise shift left operation
-            IShL | LShL => {
-                let left = stack.pop_boxed()?;
-                let right = stack.pop_boxed()?;
-                stack.push(AST::Operation(Operation {
-                    left,
-                    ty: OperationType::BitwiseShl,
-                    right,
-                }))
-            }
-
-            // >> Bitwise shift right operation
-            IShR | LShR => {
-                let left = stack.pop_boxed()?;
-                let right = stack.pop_boxed()?;
-                stack.push(AST::Operation(Operation {
-                    left,
-                    ty: OperationType::BitwiseShr,
-                    right,
-                }))
-            }
-
-            // >>> Logical shift right operation
-            IUShR | LUShR => {
-                let left = stack.pop_boxed()?;
-                let right = stack.pop_boxed()?;
-                stack.push(AST::Operation(Operation {
-                    left,
-                    ty: OperationType::LogicalShr,
-                    right,
-                }))
-            }
-
-            // Negated value !value
-            INeg | FNeg | DNeg | LNeg => {
-                let value = stack.pop_boxed()?;
-                stack.push(AST::Negated(value))
-            }
-
-            // a == b int/ref compare equal with jump
-            IfICmpEq(index) | IfACmpEq(index) => {
-                let left = stack.pop_boxed()?;
-                let right = stack.pop_boxed()?;
-
-                ast.push(AST::Condition(JumpCondition {
-                    left,
-                    right,
-                    ty: ConditionType::Equal,
-                    jump_index: *index,
-                }))
-            }
-
-            // a != b int/ref compare not equal with jump
-            IfICmpNe(index) | IfACmpNe(index) => {
-                let left = stack.pop_boxed()?;
-                let right = stack.pop_boxed()?;
-
-                ast.push(AST::Condition(JumpCondition {
-                    left,
-                    right,
-                    ty: ConditionType::NotEqual,
-                    jump_index: *index,
-                }))
-            }
-
-            // a > b int compare not equal with jump
-            IfICmpGt(index) => {
-                let left = stack.pop_boxed()?;
-                let right = stack.pop_boxed()?;
-
-                ast.push(AST::Condition(JumpCondition {
-                    left,
-                    right,
-                    ty: ConditionType::GreaterThan,
-                    jump_index: *index,
-                }))
-            }
-
-            // a >= b int compare not equal with jump
-            IfICmpGe(index) => {
-                let left = stack.pop_boxed()?;
-                let right = stack.pop_boxed()?;
-
-                ast.push(AST::Condition(JumpCondition {
-                    left,
-                    right,
-                    ty: ConditionType::GreaterThanOrEqual,
-                    jump_index: *index,
-                }))
-            }
-
-            // a < b int compare not equal with jump
-            IfICmpLt(index) => {
-                let left = stack.pop_boxed()?;
-                let right = stack.pop_boxed()?;
-
-                ast.push(AST::Condition(JumpCondition {
-                    left,
-                    right,
-                    ty: ConditionType::LessThan,
-                    jump_index: *index,
-                }))
-            }
-
-            // a <= b int compare not equal with jump
-            IfICmpLe(index) => {
-                let left = stack.pop_boxed()?;
-                let right = stack.pop_boxed()?;
-
-                ast.push(AST::Condition(JumpCondition {
-                    left,
-                    right,
-                    ty: ConditionType::LessThanOrEqual,
-                    jump_index: *index,
-                }))
-            }
-
-            // value != null non null comparison
-            IfNonNull(index) => {
-                let left = stack.pop_boxed()?;
-                let right = Box::new(AST::Value(Value::Null));
-
-                // left MUST be a reference or null constant
-
-                ast.push(AST::Condition(JumpCondition {
-                    left,
-                    right,
-                    ty: ConditionType::NotEqual,
-                    jump_index: *index,
-                }))
-            }
-
-            // value == null null comparison
-            IfNull(index) => {
-                let left = stack.pop_boxed()?;
-                let right = Box::new(AST::Value(Value::Null));
-
-                // left MUST be a reference or null constant
-
-                ast.push(AST::Condition(JumpCondition {
-                    left,
-                    right,
-                    ty: ConditionType::Equal,
-                    jump_index: *index,
-                }))
-            }
-
-            // Integer lookup switch case
-            LookupSwitch(data) => {
-                let key = stack.pop_boxed()?;
-                // key MUST be a int
-
-                ast.push(AST::IntegerSwitch(IntegerSwitch {
-                    key,
-                    data: data.clone(),
-                }))
-            }
-
-            // return value; Return with value
-            AReturn | IReturn | FReturn | DReturn | LReturn => {
-                let value = stack.pop_boxed()?;
-                ast.push(AST::Return(Some(value)))
-            }
-
-            // return; Void return
-            Return => ast.push(AST::Return(None)),
-
-            value => ast.push(AST::Other(value.clone())),
+    for (_pos, instr) in iter.by_ref() {
+        if let Err(err) = pinstr(instr, pool, &mut stack, &mut ast) {
+            eprintln!("ERR: {:?}", err);
+            ast.push(AST::Other(instr.clone()));
+            break;
         }
+    }
+
+    for (_pos, instr) in iter {
+        ast.push(AST::Other(instr.clone()))
     }
 
     Ok(ast)

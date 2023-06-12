@@ -12,7 +12,7 @@ use crate::constant_pool::PoolIndex;
 pub type Index = u16;
 pub type BranchIndex = u16;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub enum ArrayType {
     Boolean = 4,
     Char = 5,

@@ -1,6 +1,7 @@
 use classfile::{
     attributes::Code,
     constant_pool::{ConstantItem, ConstantPool, PoolIndex},
+    inst::LookupSwitchData,
 };
 use thiserror::Error;
 
@@ -13,6 +14,15 @@ pub enum AST<'a> {
     Negated(Box<AST<'a>>),
     /// Conditial statement
     Condition(JumpCondition<'a>),
+    /// Integer switch
+    IntegerSwitch(IntegerSwitch<'a>),
+    /// Return with optional value
+    Return(Option<Box<AST<'a>>>),
+}
+
+pub struct IntegerSwitch<'a> {
+    key: Box<AST<'a>>,
+    data: LookupSwitchData,
 }
 
 pub struct JumpCondition<'a> {
@@ -33,7 +43,6 @@ pub enum ConditionType {
     GreaterThanOrEqual,
     LessThan,
     LessThanOrEqual,
-    Eq,
 }
 
 pub struct Operation<'a> {
@@ -412,6 +421,56 @@ pub fn generate_ast<'a>(code: Code, pool: &ConstantPool<'a>) -> Result<(), Instr
                     jump_index: *index,
                 }))
             }
+
+            // value != null non null comparison
+            IfNonNull(index) => {
+                let left = stack.pop_boxed()?;
+                let right = Box::new(AST::Constant(Constant::Null));
+
+                // left MUST be a reference or null constant
+
+                ast.push(AST::Condition(JumpCondition {
+                    left,
+                    right,
+                    ty: ConditionType::NotEqual,
+                    jump_index: *index,
+                }))
+            }
+
+            // value == null null comparison
+            IfNull(index) => {
+                let left = stack.pop_boxed()?;
+                let right = Box::new(AST::Constant(Constant::Null));
+
+                // left MUST be a reference or null constant
+
+                ast.push(AST::Condition(JumpCondition {
+                    left,
+                    right,
+                    ty: ConditionType::Equal,
+                    jump_index: *index,
+                }))
+            }
+
+            // Integer lookup switch case
+            LookupSwitch(data) => {
+                let key = stack.pop_boxed()?;
+                // key MUST be a int
+
+                ast.push(AST::IntegerSwitch(IntegerSwitch {
+                    key,
+                    data: data.clone(),
+                }))
+            }
+
+            // return value; Return with value
+            AReturn | IReturn | FReturn | DReturn | LReturn => {
+                let value = stack.pop_boxed()?;
+                ast.push(AST::Return(Some(value)))
+            }
+
+            // return; Void return
+            Return => ast.push(AST::Return(None)),
 
             _ => {}
         }

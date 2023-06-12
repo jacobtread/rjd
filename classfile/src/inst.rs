@@ -89,7 +89,16 @@ fn lookup_switch(input: &[u8], pos: i32) -> IResult<&[u8], Instruction> {
 
     let pairs = pairs.into_iter().map(|(a, b)| (a, pos + b)).collect();
 
-    Ok((input, Instruction::LookupSwitch { default, pairs }))
+    Ok((
+        input,
+        Instruction::LookupSwitch(LookupSwitchData { default, pairs }),
+    ))
+}
+
+#[derive(Debug, Clone)]
+pub struct LookupSwitchData {
+    pub default: i32,
+    pub pairs: Vec<(i32, i32)>,
 }
 
 pub fn instruction(input: &[u8], wide: bool, pos: i32) -> IResult<&[u8], Instruction> {
@@ -432,10 +441,7 @@ pub enum Instruction {
     LShL,
     LShR,
     LUShR,
-    LookupSwitch {
-        default: i32,
-        pairs: Vec<(i32, i32)>,
-    },
+    LookupSwitch(LookupSwitchData),
     Nop,
     MonitorEnter,
     MonitorExit,

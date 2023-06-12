@@ -225,14 +225,15 @@ pub fn instruction(input: &[u8], wide: bool, pos: i32) -> IResult<&[u8], Instruc
         0x83 => LXOr,
         0x84 => {
             return if wide {
-                map(tuple((be_u16, be_i16)), |(index, value)| IInc {
-                    index,
-                    value,
+                map(tuple((be_u16, be_i16)), |(index, value)| {
+                    IInc(IIncData { index, value })
                 })(input)
             } else {
-                map(tuple((u8, u8)), |(index, value)| IInc {
-                    index: index as u16,
-                    value: value as i16,
+                map(tuple((u8, u8)), |(index, value)| {
+                    IInc(IIncData {
+                        index: index as u16,
+                        value: value as i16,
+                    })
                 })(input)
             }
         }
@@ -315,9 +316,8 @@ pub fn instruction(input: &[u8], wide: bool, pos: i32) -> IResult<&[u8], Instruc
         0xc4 => return instruction(input, true, pos + 1),
 
         0xc5 => {
-            return map(tuple((be_u16, u8)), |(index, dimensions)| MultiANewArray {
-                index,
-                dimensions,
+            return map(tuple((be_u16, u8)), |(index, dimensions)| {
+                MultiANewArray(MultiANewArrayData { index, dimensions })
             })(input)
         }
 
@@ -349,7 +349,7 @@ pub struct MultiANewArrayData {
     /// The index of the array object type in the constant pool
     pub index: PoolIndex,
     /// The number of dimensions the array has
-    pub dimension: u8,
+    pub dimensions: u8,
 }
 
 #[derive(Debug, Clone)]

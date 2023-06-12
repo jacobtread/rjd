@@ -134,7 +134,7 @@ fn array(input: &str) -> IResult<&str, FieldDesc> {
 fn object(input: &str) -> IResult<&str, FieldDesc> {
     map(
         delimited(char('L'), take_until1(";"), char(';')),
-        |object: &str| FieldDesc::Object(object),
+        FieldDesc::Object,
     )(input)
 }
 

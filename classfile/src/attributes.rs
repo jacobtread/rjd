@@ -47,7 +47,6 @@ pub enum Attribute {
     AnnotationDefault(ElementValue),
     BootstrapMethods(BootstrapMethods),
     MethodParameters(MethodParameters),
-    // TODO: Avoid this heap allocation by just ignoring other attributes
     Other(String, Vec<u8>),
 }
 
@@ -125,12 +124,12 @@ fn constant_value(input: &[u8]) -> IResult<&[u8], Attribute> {
 pub struct Code {
     pub max_stack: u16,
     pub max_locals: u16,
-    pub code: Vec<Instruction>,
+    pub code: Vec<(i32, Instruction)>,
     pub exception_table: Vec<CodeException>,
     pub attributes: Vec<Attribute>,
 }
 
-fn code_bytes(input: &[u8]) -> IResult<&[u8], Vec<Instruction>> {
+fn code_bytes(input: &[u8]) -> IResult<&[u8], Vec<(i32, Instruction)>> {
     let mut input = input;
     let mut last_length = input.len();
     let mut pos = 0;
@@ -140,7 +139,7 @@ fn code_bytes(input: &[u8]) -> IResult<&[u8], Vec<Instruction>> {
     while last_length > 0 {
         let (i, instruction) = instruction(input, false, pos)?;
 
-        instructions.push(instruction);
+        instructions.push((pos, instruction));
 
         let new_length = i.len();
         // Change in length

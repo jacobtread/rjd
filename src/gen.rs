@@ -8,8 +8,6 @@ use classfile::{
 };
 use thiserror::Error;
 
-use crate::ast::{pinstr, Arrayref, InstrError};
-
 /// Block of instructions
 #[derive(Debug)]
 pub struct Block<'set> {
@@ -21,23 +19,23 @@ impl<'set> Block<'set> {
     pub fn decompile<'a, 'b: 'a>(
         &'b self,
         pool: &'b ConstantPool<'a>,
-    ) -> Result<Vec<AST<'a>>, InstrError> {
+    ) -> Result<Vec<AST<'a>>, ProcessError> {
         let mut stack: Stack<'a> = Stack::default();
-        let mut ast: Vec<AST> = Vec::new();
+        let mut ast: Vec<AST<'a>> = Vec::new();
 
-        // let mut iter = self.instructions.inner.iter();
+        let mut iter = self.instructions.inner.iter();
 
-        // for (_pos, instr) in iter.by_ref() {
-        //     if let Err(err) = pinstr(instr, pool, &mut stack, &mut ast) {
-        //         eprintln!("ERR: {:?}", err);
-        //         ast.push(AST::Other(instr.clone()));
-        //         break;
-        //     }
-        // }
+        for (_pos, instr) in iter.by_ref() {
+            if let Err(err) = process(instr, pool, &mut stack, &mut ast) {
+                eprintln!("ERR: {:?}", err);
+                ast.push(AST::Instruction(instr.clone()));
+                break;
+            }
+        }
 
-        // for (_pos, instr) in iter {
-        //     ast.push(AST::Other(instr.clone()))
-        // }
+        for (_pos, instr) in iter {
+            ast.push(AST::Instruction(instr.clone()))
+        }
 
         Ok(ast)
     }
@@ -492,6 +490,8 @@ pub enum AST<'a> {
         index: StackItem<'a>,
         data: TableSwitchData,
     },
+    /// Plain instruction fallback for errors
+    Instruction(Instruction),
 }
 
 /// The type of condition

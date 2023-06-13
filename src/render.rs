@@ -1,4 +1,4 @@
-use std::fmt::{Debug, Display, Write};
+use std::fmt::{Display, Write};
 
 use classfile::{
     attributes::{Attribute, BorrowedInstrSet},
@@ -174,6 +174,7 @@ impl Display for JavaClassRenderer<'_> {
                         instructions: BorrowedInstrSet {
                             inner: &code.code.inner,
                         },
+                        start: 0,
                         branches: vec![],
                     };
 
@@ -191,21 +192,29 @@ impl Display for JavaClassRenderer<'_> {
                         }
                     }
 
-                    // let blocks = create_blocks(&code.code);
+                    f.write_str("\n\n START: ===============\n")?;
 
-                    // for (_pos, block) in blocks {
-                    //     let result = block.decompile(&class.constant_pool);
-                    //     match result {
-                    //         Ok(values) => {
-                    //             for value in values {
-                    //                 writeln!(f, "    {}", value)?;
-                    //             }
-                    //         }
-                    //         Err(error) => {
-                    //             writeln!(f, "ERRR: {}", error)?;
-                    //         }
-                    //     }
-                    // }
+                    let blocks = create_blocks(&code.code);
+                    if !blocks.is_empty() {
+                        for (start, block) in blocks {
+                            writeln!(f, "    {}:", start)?;
+
+                            let result = block.decompile(&class.constant_pool);
+                            match result {
+                                Ok(values) => {
+                                    for value in values {
+                                        writeln!(f, "      {}", value)?;
+                                    }
+                                }
+                                Err(error) => {
+                                    writeln!(f, "ERRR: {}", error)?;
+                                }
+                            }
+
+                            writeln!(f, "      branches: {:?}", &block.branches)?;
+                        }
+                    }
+                    f.write_str("\n\n END: ===============\n")?;
                 }
                 f.write_str("  }\n\n")?;
             }

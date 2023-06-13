@@ -14,6 +14,7 @@ use thiserror::Error;
 /// Block of instructions
 #[derive(Debug)]
 pub struct Block<'set> {
+    pub start: usize,
     pub instructions: BorrowedInstrSet<'set>,
     pub branches: Vec<usize>,
 }
@@ -44,7 +45,7 @@ impl<'set> Block<'set> {
     }
 }
 
-pub fn create_blocks(input: &InstructionSet) -> HashMap<usize, Block> {
+pub fn create_blocks(input: &InstructionSet) -> HashMap<usize, Block<'_>> {
     input
         .split_jumps()
         .into_iter()
@@ -73,6 +74,18 @@ pub fn create_blocks(input: &InstructionSet) -> HashMap<usize, Block> {
                     branches.push(*branch as usize);
                 }
                 Return | AReturn | IReturn | LReturn | DReturn | FReturn => {}
+                TableSwitch(data) => {
+                    for offset in &data.offsets {
+                        let jump = *offset as usize;
+                        branches.push(jump)
+                    }
+                }
+                LookupSwitch(data) => {
+                    for (_, offset) in &data.pairs {
+                        let jump = *offset as usize;
+                        branches.push(jump)
+                    }
+                }
                 _ => {
                     let next_pos = next.unwrap();
                     branches.push(next_pos);
@@ -82,6 +95,7 @@ pub fn create_blocks(input: &InstructionSet) -> HashMap<usize, Block> {
             (
                 first_pos,
                 Block {
+                    start: first_pos,
                     instructions: set,
                     branches,
                 },

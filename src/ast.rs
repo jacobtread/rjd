@@ -667,7 +667,7 @@ pub fn pinstr<'a, 'b: 'a>(
             }))
         }
 
-        // > Less than comparison (float, double)
+        // > Greater than comparison (float, double)
         FCmpG | DCmpG => {
             let left = stack.pop_boxed()?;
             let right = stack.pop_boxed()?;

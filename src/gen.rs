@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use classfile::{
     attributes::{BorrowedInstrSet, InstructionSet},
-    constant_pool::{ConstantPool, Fieldref, InvokeDynamic, Methodref, PoolIndex},
+    constant_pool::{ConstantItem, ConstantPool, Fieldref, InvokeDynamic, Methodref, PoolIndex},
     inst::{ArrayType, Instruction, LookupSwitchData, TableSwitchData},
     types::{Class, FieldDesc},
 };
@@ -95,13 +95,20 @@ pub fn create_blocks(input: &InstructionSet) -> HashMap<usize, Block> {
 pub enum StackItem<'a> {
     /// Represents an actual value
     Value(Value<'a>),
-    /// Represents a cast of a value to a type
-    Casted {
+    /// Represents the casting of a literal type
+    LiteralCast {
         /// The value being cast
         value: Box<StackItem<'a>>,
         /// The type that it was cast to
         cast_to: FieldDesc<'a>,
     },
+
+    /// Represents a checked cast to a specific object type
+    CheckedCast {
+        value: Box<StackItem<'a>>,
+        cast_to: Class<'a>,
+    },
+
     /// Represents an operation between two stack items
     Operation {
         /// The left hand side of the operation
@@ -149,6 +156,48 @@ pub enum StackItem<'a> {
         /// The value being negated
         value: Box<StackItem<'a>>,
     },
+    /// Represents the creation of a new object
+    New {
+        /// The object type
+        class: Class<'a>,
+    },
+
+    /// Array of primitive type values 1 dimension
+    NewArray {
+        /// The stack item representing the length of the array
+        count: Box<StackItem<'a>>,
+        /// The type of the array
+        ty: ArrayType,
+    },
+
+    /// Array of object references
+    ANewArray {
+        /// The stack item representing the length of the array
+        count: Box<StackItem<'a>>,
+        /// The type of the reference
+        class: Class<'a>,
+    },
+
+    /// Multi-dimensional array of object references
+    MultiANewArray {
+        /// The length of each array dimension
+        counts: Vec<StackItem<'a>>,
+        /// The type of the reference
+        class: Class<'a>,
+    },
+    /// Represents an instanceof check
+    InstanceOf {
+        /// The value to compare
+        value: Box<StackItem<'a>>,
+        /// The type to compare against
+        class: Class<'a>,
+    },
+
+    /// Represents a thrown value
+    Thrown {
+        /// The value that was thrown
+        value: Box<StackItem<'a>>,
+    },
 
     /// TODO: Expand JSR and Ret before this step
     Jsr(u16),
@@ -170,35 +219,6 @@ pub enum Value<'a> {
     Long(i64),
     /// Literal double value
     Double(f64),
-    /// Reference to an object type
-    Objectref(Class<'a>),
-    /// Reference to an array type
-    Arrayref(Arrayref<'a>),
-}
-
-/// Types of array references
-#[derive(Debug, Clone)]
-pub enum ArrayRef<'a> {
-    /// Array of primitive type values 1 dimension
-    Primitive {
-        /// The stack item representing the length of the array
-        count: Box<StackItem<'a>>,
-        ty: ArrayType,
-    },
-    /// Array of object references
-    Reference {
-        /// The stack item representing the length of the array
-        count: Box<StackItem<'a>>,
-        /// The type of the reference
-        ty: Class<'a>,
-    },
-    /// Multi-dimensional array of object references
-    MultiReferenceArray {
-        /// The length of each array dimension
-        counts: Vec<StackItem<'a>>,
-        /// The type of the reference
-        ty: Class<'a>,
-    },
 }
 
 /// Different operation types
@@ -408,7 +428,7 @@ pub enum AST<'a> {
     },
     /// Conditional statement with a jump to another block
     Condition {
-        /// Left hand side of the condition
+        /// Left hand side of the condition (TODO: I think i need to reverse left and right)
         left: StackItem<'a>,
         /// Right hand side of the condition
         right: StackItem<'a>,
@@ -454,10 +474,12 @@ pub enum AST<'a> {
         /// The index of the local variable
         index: u16,
         /// The amount to increment by
-        value: u16,
+        value: i16,
     },
     InvokeDynamic(InvokeDynamic),
-    Throw {
+    /// Represents a thrown value
+    Thrown {
+        /// The value that was thrown
         value: StackItem<'a>,
     },
     /// TODO: Should this be handled elsewhere?
@@ -467,7 +489,7 @@ pub enum AST<'a> {
     },
     /// TODO: Should this be handled elsewhere?
     TableSwitch {
-        key: StackItem<'a>,
+        index: StackItem<'a>,
         data: TableSwitchData,
     },
 }
@@ -497,6 +519,14 @@ pub enum ProcessError {
     InvalidFieldref(u16),
     #[error("Invalid field reference index {0}")]
     InvalidMethodref(u16),
+
+    #[error("Invalid class reference index {0}")]
+    InvalidClassIndex(u16),
+    #[error("Class name was not valid")]
+    InvalidClassName,
+
+    #[error("Invalid constant index for loading {0}")]
+    InvalidConstantIndex(u16),
 }
 
 fn process<'a>(
@@ -516,10 +546,27 @@ fn process<'a>(
         Pop2 => stack.pop2()?,
 
         // Cast checking
-        CheckCast(_) => todo!(),
+        CheckCast(index) => {
+            let class_name: &str = pool
+                .get_class_name(*index)
+                .ok_or(ProcessError::InvalidClassIndex(*index))?;
+            let class: Class =
+                Class::try_parse(class_name).ok_or(ProcessError::InvalidClassName)?;
+            let value = stack.pop_boxed()?;
+            stack.push(StackItem::CheckedCast {
+                value,
+                cast_to: class,
+            })
+        }
 
         // Exception throwing
-        AThrow => todo!(),
+        AThrow => {
+            let value = stack.pop()?;
+            stack.push(StackItem::Thrown {
+                value: Box::new(value.clone()),
+            });
+            stms.push(AST::Thrown { value })
+        }
 
         // Constant value pushes
         BIPush(value) => stack.push_value(Value::Integer(*value as i32)),
@@ -531,7 +578,28 @@ fn process<'a>(
         DConst(value) => stack.push_value(Value::Double(*value)),
         LConst(value) => stack.push_value(Value::Long(*value)),
         AConstNull => stack.push_value(Value::Null),
-        LoadConst(_) => todo!(),
+        LoadConst(index) => {
+            let value = pool
+                .get(*index)
+                .ok_or(ProcessError::InvalidConstantIndex(*index))?;
+
+            let value = match value {
+                ConstantItem::Integer(value) => Value::Integer(*value),
+                ConstantItem::Float(value) => Value::Float(*value),
+                ConstantItem::Long(value) => Value::Long(*value),
+                ConstantItem::Double(value) => Value::Double(*value),
+                ConstantItem::String(index) => {
+                    let value: &str = pool
+                        .get_utf8(*index)
+                        .ok_or(ProcessError::InvalidConstantIndex(*index))?;
+                    Value::String(value)
+                }
+
+                _ => return Err(ProcessError::InvalidConstantIndex(*index)),
+            };
+
+            stack.push_value(value);
+        }
 
         // Local variable storing
         AStore(index) | LStore(index) | IStore(index) | DStore(index) | FStore(index) => {
@@ -563,10 +631,55 @@ fn process<'a>(
         }),
 
         // Function invokes
-        InvokeSpecial(_) => todo!(),
-        InvokeStatic(_) => todo!(),
-        InvokeVirtual(_) => todo!(),
-        InvokeInterface(_) => todo!(),
+        InvokeSpecial(index) | InvokeVirtual(index) | InvokeInterface(index) => {
+            let method: Methodref = pool
+                .get_methodref(*index)
+                .ok_or(ProcessError::InvalidMethodref(*index))?;
+
+            let mut args = Vec::with_capacity(method.descriptor.parameters.len());
+            for _ in 0..args.len() {
+                args.push(stack.pop()?);
+            }
+            args.reverse();
+
+            let reference = stack.pop_boxed()?;
+
+            let call = Call {
+                args,
+                method,
+                reference,
+            };
+
+            // TODO: FIGURE OUT IF THIS CALL SHOULD BE PUSHING STACK or AST
+
+            // Non return types should end up on the stack
+            if !matches!(&call.method.descriptor.return_type, FieldDesc::Void) {
+                stack.push(StackItem::Call(call))
+            } else {
+                stms.push(AST::Call(call))
+            }
+        }
+        InvokeStatic(index) => {
+            let method: Methodref = pool
+                .get_methodref(*index)
+                .ok_or(ProcessError::InvalidMethodref(*index))?;
+
+            let mut args = Vec::with_capacity(method.descriptor.parameters.len());
+            for _ in 0..args.len() {
+                args.push(stack.pop()?);
+            }
+            args.reverse();
+            let call = CallStatic { args, method };
+
+            // TODO: FIGURE OUT IF THIS CALL SHOULD BE PUSHING STACK or AST
+
+            // Non return types should end up on the stack
+            if !matches!(&call.method.descriptor.return_type, FieldDesc::Void) {
+                stack.push(StackItem::CallStatic(call))
+            } else {
+                stms.push(AST::CallStatic(call))
+            }
+        }
 
         // Storing in fields
         PutField(index) => {
@@ -574,8 +687,8 @@ fn process<'a>(
                 .get_fieldref(*index)
                 .ok_or(ProcessError::InvalidFieldref(*index))?;
 
-            let reference: StackItem = stack.pop()?;
             let value: StackItem = stack.pop()?;
+            let reference: StackItem = stack.pop()?;
 
             stms.push(AST::PutField {
                 field,
@@ -617,7 +730,7 @@ fn process<'a>(
         // Returning
         Return => stms.push(AST::Return { value: None }),
         AReturn | DReturn | FReturn | IReturn | LReturn => {
-            let value = stack.pop()?;
+            let value: StackItem = stack.pop()?;
             stms.push(AST::Return { value: Some(value) })
         }
 
@@ -630,168 +743,499 @@ fn process<'a>(
         Dup2X2 => stack.dup_2x2()?,
 
         // Array loading
-        IALoad => todo!(),
-        LALoad => todo!(),
-        DALoad => todo!(),
-        FALoad => todo!(),
-        SALoad => todo!(),
-        CALoad => todo!(),
-        BALoad => todo!(),
-        AALoad => todo!(),
+        IALoad | LALoad | DALoad | FALoad | SALoad | CALoad | BALoad | AALoad => {
+            let index: Box<StackItem> = stack.pop_boxed()?;
+            let reference: Box<StackItem> = stack.pop_boxed()?;
+
+            stack.push(StackItem::ArrayLoad { reference, index })
+        }
 
         // Array storing
-        IAStore => todo!(),
-        LAStore => todo!(),
-        DAStore => todo!(),
-        FAStore => todo!(),
-        SAStore => todo!(),
-        CAStore => todo!(),
-        BAStore => todo!(),
-        AAStore => todo!(),
+        IAStore | LAStore | DAStore | FAStore | SAStore | CAStore | BAStore | AAStore => {
+            let value: StackItem = stack.pop()?;
+            let index: StackItem = stack.pop()?;
+            let reference: StackItem = stack.pop()?;
+            stms.push(AST::ArrayStore {
+                reference,
+                index,
+                value,
+            })
+        }
 
         // Adding
-        IAdd => todo!(),
-        LAdd => todo!(),
-        FAdd => todo!(),
-        DAdd => todo!(),
+        IAdd | LAdd | FAdd | DAdd => {
+            let left: Box<StackItem> = stack.pop_boxed()?;
+            let right: Box<StackItem> = stack.pop_boxed()?;
+            stack.push(StackItem::Operation {
+                left,
+                ty: OperationType::Add,
+                right,
+            })
+        }
 
         // Subtracting
-        ISub => todo!(),
-        LSub => todo!(),
-        FSub => todo!(),
-        DSub => todo!(),
+        ISub | LSub | FSub | DSub => {
+            let left: Box<StackItem> = stack.pop_boxed()?;
+            let right: Box<StackItem> = stack.pop_boxed()?;
+            stack.push(StackItem::Operation {
+                left,
+                ty: OperationType::Subtract,
+                right,
+            })
+        }
 
         // Dividing
-        IDiv => todo!(),
-        LDiv => todo!(),
-        FDiv => todo!(),
-        DDiv => todo!(),
+        IDiv | LDiv | FDiv | DDiv => {
+            let left: Box<StackItem> = stack.pop_boxed()?;
+            let right: Box<StackItem> = stack.pop_boxed()?;
+            stack.push(StackItem::Operation {
+                left,
+                ty: OperationType::Divide,
+                right,
+            })
+        }
 
         // Multiplying
-        IMul => todo!(),
-        LMul => todo!(),
-        FMul => todo!(),
-        DMul => todo!(),
-
-        // Negating
-        INeg => todo!(),
-        LNeg => todo!(),
-        FNeg => todo!(),
-        DNeg => todo!(),
+        IMul | LMul | FMul | DMul => {
+            let left: Box<StackItem> = stack.pop_boxed()?;
+            let right: Box<StackItem> = stack.pop_boxed()?;
+            stack.push(StackItem::Operation {
+                left,
+                ty: OperationType::Muliply,
+                right,
+            })
+        }
 
         // Remainder
-        IRem => todo!(),
-        LRem => todo!(),
-        FRem => todo!(),
-        DRem => todo!(),
+        IRem | LRem | FRem | DRem => {
+            let left: Box<StackItem> = stack.pop_boxed()?;
+            let right: Box<StackItem> = stack.pop_boxed()?;
+            stack.push(StackItem::Operation {
+                left,
+                ty: OperationType::Remainder,
+                right,
+            })
+        }
 
         // Bitwise And
-        IAnd => todo!(),
-        LAnd => todo!(),
+        IAnd | LAnd => {
+            let left: Box<StackItem> = stack.pop_boxed()?;
+            let right: Box<StackItem> = stack.pop_boxed()?;
+            stack.push(StackItem::Operation {
+                left,
+                ty: OperationType::BitwiseAnd,
+                right,
+            })
+        }
 
         // | Bitwise OR operation
-        LOr => todo!(),
-        IOr => todo!(),
+        LOr | IOr => {
+            let left: Box<StackItem> = stack.pop_boxed()?;
+            let right: Box<StackItem> = stack.pop_boxed()?;
+            stack.push(StackItem::Operation {
+                left,
+                ty: OperationType::BitwiseOr,
+                right,
+            })
+        }
 
         // ^ XOR operation
-        LXOr => todo!(),
-        IXOr => todo!(),
-
-        FCmpL => todo!(),
-        FCmpG => todo!(),
-
-        // Int casting
-        I2l => todo!(),
-        I2d => todo!(),
-        I2s => todo!(),
-        I2c => todo!(),
-        I2b => todo!(),
-        I2f => todo!(),
-        // Long Casting
-        L2i => todo!(),
-        L2d => todo!(),
-        L2f => todo!(),
-        // Float Casting
-        F2d => todo!(),
-        F2i => todo!(),
-        F2l => todo!(),
-        // Double casting
-        D2i => todo!(),
-        D2f => todo!(),
-        D2l => todo!(),
+        LXOr | IXOr => {
+            let left: Box<StackItem> = stack.pop_boxed()?;
+            let right: Box<StackItem> = stack.pop_boxed()?;
+            stack.push(StackItem::Operation {
+                left,
+                ty: OperationType::Xor,
+                right,
+            })
+        }
 
         // << Bitwise shift left operation
-        IShL => todo!(),
-        LShL => todo!(),
+        IShL | LShL => {
+            let left: Box<StackItem> = stack.pop_boxed()?;
+            let right: Box<StackItem> = stack.pop_boxed()?;
+            stack.push(StackItem::Operation {
+                left,
+                ty: OperationType::BitwiseShl,
+                right,
+            })
+        }
 
         // >> Bitwise shift right operation
-        IShR => todo!(),
-        LShR => todo!(),
+        IShR | LShR => {
+            let left: Box<StackItem> = stack.pop_boxed()?;
+            let right: Box<StackItem> = stack.pop_boxed()?;
+            stack.push(StackItem::Operation {
+                left,
+                ty: OperationType::BitwiseShr,
+                right,
+            })
+        }
 
         // >>> Logical shift right operation
-        IUShR => todo!(),
-        LUShR => todo!(),
+        IUShR | LUShR => {
+            let left: Box<StackItem> = stack.pop_boxed()?;
+            let right: Box<StackItem> = stack.pop_boxed()?;
+            stack.push(StackItem::Operation {
+                left,
+                ty: OperationType::LogicalShr,
+                right,
+            })
+        }
+
+        // Negating
+        INeg | LNeg | FNeg | DNeg => {
+            let value = stack.pop_boxed()?;
+            stack.push(StackItem::Negated { value })
+        }
+
+        // < Less than comparison (float, double)
+        FCmpL | DCmpL => {
+            let left: Box<StackItem> = stack.pop_boxed()?;
+            let right: Box<StackItem> = stack.pop_boxed()?;
+            stack.push(StackItem::Operation {
+                left,
+                ty: OperationType::CompareLess,
+                right,
+            })
+        }
+
+        // > Greater than comparison (float, double)
+        FCmpG | DCmpG => {
+            let left: Box<StackItem> = stack.pop_boxed()?;
+            let right: Box<StackItem> = stack.pop_boxed()?;
+            stack.push(StackItem::Operation {
+                left,
+                ty: OperationType::CompareGreater,
+                right,
+            })
+        }
+
+        // Int casting
+        L2i | D2i | F2i => {
+            let value = stack.pop_boxed()?;
+            stack.push(StackItem::LiteralCast {
+                value,
+                cast_to: FieldDesc::Int,
+            })
+        }
+
+        // Long casting
+        I2l | F2l | D2l => {
+            let value = stack.pop_boxed()?;
+            stack.push(StackItem::LiteralCast {
+                value,
+                cast_to: FieldDesc::Long,
+            })
+        }
+
+        // Float casting
+        D2f | L2f | I2f => {
+            let value = stack.pop_boxed()?;
+            stack.push(StackItem::LiteralCast {
+                value,
+                cast_to: FieldDesc::Float,
+            })
+        }
+
+        // Double casting
+        I2d | L2d | F2d => {
+            let value = stack.pop_boxed()?;
+            stack.push(StackItem::LiteralCast {
+                value,
+                cast_to: FieldDesc::Double,
+            })
+        }
+
+        I2s => {
+            let value = stack.pop_boxed()?;
+            stack.push(StackItem::LiteralCast {
+                value,
+                cast_to: FieldDesc::Short,
+            })
+        }
+        I2c => {
+            let value = stack.pop_boxed()?;
+            stack.push(StackItem::LiteralCast {
+                value,
+                cast_to: FieldDesc::Char,
+            })
+        }
+        I2b => {
+            let value = stack.pop_boxed()?;
+            stack.push(StackItem::LiteralCast {
+                value,
+                cast_to: FieldDesc::Byte,
+            })
+        }
 
         // Switches
-        TableSwitch(_) => todo!(),
-        LookupSwitch(_) => todo!(),
+        LookupSwitch(data) => {
+            let key = stack.pop()?;
+            stms.push(AST::LookupSwitch {
+                key,
+                data: data.clone(),
+            })
+        }
+        TableSwitch(data) => {
+            let index = stack.pop()?;
+            stms.push(AST::TableSwitch {
+                index,
+                data: data.clone(),
+            })
+        }
 
-        // Monitoring
-        MonitorEnter => todo!(),
-        MonitorExit => todo!(),
+        // Monitoring (TODO: Find actual right way)
+        MonitorEnter | MonitorExit => stack.pop_discard()?,
 
         // New instance creation
-        New(_) => todo!(),
+        New(index) => {
+            let class_name: &str = pool
+                .get_class_name(*index)
+                .ok_or(ProcessError::InvalidClassIndex(*index))?;
+            let class: Class =
+                Class::try_parse(class_name).ok_or(ProcessError::InvalidClassName)?;
+            stack.push(StackItem::New { class });
+        }
 
         // Array creation
-        NewArray(_) => todo!(),
-        ANewArray(_) => todo!(),
-        MultiANewArray(data) => todo!(),
+        NewArray(ty) => {
+            let count: Box<StackItem> = stack.pop_boxed()?;
+
+            stack.push(StackItem::NewArray { count, ty: *ty });
+        }
+        ANewArray(index) => {
+            let class_name: &str = pool
+                .get_class_name(*index)
+                .ok_or(ProcessError::InvalidClassIndex(*index))?;
+            let class: Class =
+                Class::try_parse(class_name).ok_or(ProcessError::InvalidClassName)?;
+            let count: Box<StackItem> = stack.pop_boxed()?;
+            stack.push(StackItem::ANewArray { count, class });
+        }
+        MultiANewArray(data) => {
+            let class_name: &str = pool
+                .get_class_name(data.index)
+                .ok_or(ProcessError::InvalidClassIndex(data.index))?;
+            let class: Class =
+                Class::try_parse(class_name).ok_or(ProcessError::InvalidClassName)?;
+            let mut counts: Vec<StackItem> = Vec::with_capacity(data.dimensions as usize);
+            for _ in 0..data.dimensions {
+                counts.push(stack.pop()?);
+            }
+            counts.reverse();
+
+            stack.push(StackItem::MultiANewArray { counts, class });
+        }
 
         // Instance checking
-        InstanceOf(_) => todo!(),
+        InstanceOf(index) => {
+            let class_name: &str = pool
+                .get_class_name(*index)
+                .ok_or(ProcessError::InvalidClassIndex(*index))?;
+            let class: Class =
+                Class::try_parse(class_name).ok_or(ProcessError::InvalidClassName)?;
+            let value: Box<StackItem> = stack.pop_boxed()?;
+
+            stack.push(StackItem::InstanceOf { value, class })
+        }
 
         // Incrementing
-        IInc(data) => todo!(),
+        IInc(data) => stms.push(AST::LocalIncrement {
+            index: data.index,
+            value: data.value,
+        }),
 
         // invoke dynamic
-        InvokeDynamic(_) => todo!(),
+        InvokeDynamic(index) => {
+            let dynamic = pool.get_invokedynamic(*index).unwrap();
+            stms.push(AST::InvokeDynamic(dynamic))
+        }
 
         // Reference compare
-        IfACmpEq(_) => todo!(),
-        IfACmpNe(_) => todo!(),
+        IfACmpEq(index) => {
+            let left: StackItem = stack.pop()?;
+            let right: StackItem = stack.pop()?;
+            stms.push(AST::Condition {
+                left,
+                right,
+                ty: ConditionType::Equal,
+                jump_index: *index,
+            })
+        }
+        IfACmpNe(index) => {
+            let left: StackItem = stack.pop()?;
+            let right: StackItem = stack.pop()?;
+            stms.push(AST::Condition {
+                left,
+                right,
+                ty: ConditionType::NotEqual,
+                jump_index: *index,
+            })
+        }
 
         // Int compare
-        IfICmpEq(_) => todo!(),
-        IfICmpNe(_) => todo!(),
-        IfICmpLt(_) => todo!(),
-        IfICmpGe(_) => todo!(),
-        IfICmpGt(_) => todo!(),
-        IfICmpLe(_) => todo!(),
+        IfICmpEq(index) => {
+            let left: StackItem = stack.pop()?;
+            let right: StackItem = stack.pop()?;
+            stms.push(AST::Condition {
+                left,
+                right,
+                ty: ConditionType::Equal,
+                jump_index: *index,
+            })
+        }
+        IfICmpNe(index) => {
+            let left: StackItem = stack.pop()?;
+            let right: StackItem = stack.pop()?;
+            stms.push(AST::Condition {
+                left,
+                right,
+                ty: ConditionType::NotEqual,
+                jump_index: *index,
+            })
+        }
+        IfICmpLt(index) => {
+            let left: StackItem = stack.pop()?;
+            let right: StackItem = stack.pop()?;
+            stms.push(AST::Condition {
+                left,
+                right,
+                ty: ConditionType::LessThan,
+                jump_index: *index,
+            })
+        }
+        IfICmpLe(index) => {
+            let left: StackItem = stack.pop()?;
+            let right: StackItem = stack.pop()?;
+            stms.push(AST::Condition {
+                left,
+                right,
+                ty: ConditionType::LessThanOrEqual,
+                jump_index: *index,
+            })
+        }
+        IfICmpGt(index) => {
+            let left: StackItem = stack.pop()?;
+            let right: StackItem = stack.pop()?;
+            stms.push(AST::Condition {
+                left,
+                right,
+                ty: ConditionType::GreaterThan,
+                jump_index: *index,
+            })
+        }
 
-        // Double compare
-        DCmpL => todo!(),
-        DCmpG => todo!(),
+        IfICmpGe(index) => {
+            let left: StackItem = stack.pop()?;
+            let right: StackItem = stack.pop()?;
+            stms.push(AST::Condition {
+                left,
+                right,
+                ty: ConditionType::GreaterThanOrEqual,
+                jump_index: *index,
+            })
+        }
 
         // Long compare
-        LCmp => todo!(),
+        LCmp => {
+            let left = stack.pop_boxed()?;
+            let right = stack.pop_boxed()?;
+            stack.push(StackItem::Operation {
+                left,
+                ty: OperationType::SignedCompare,
+                right,
+            })
+        }
 
         // Null compare
-        IfNull(_) => todo!(),
-        IfNonNull(_) => todo!(),
+        IfNull(index) => {
+            let left: StackItem = stack.pop()?;
+            let right: StackItem = StackItem::Value(Value::Null);
+            stms.push(AST::Condition {
+                left,
+                right,
+                ty: ConditionType::Equal,
+                jump_index: *index,
+            })
+        }
+        IfNonNull(index) => {
+            let left: StackItem = stack.pop()?;
+            let right: StackItem = StackItem::Value(Value::Null);
+            stms.push(AST::Condition {
+                left,
+                right,
+                ty: ConditionType::NotEqual,
+                jump_index: *index,
+            })
+        }
 
         // Int zero compare
-        IfEq(_) => todo!(),
-        IfNe(_) => todo!(),
-        IfLt(_) => todo!(),
-        IfGe(_) => todo!(),
-        IfGt(_) => todo!(),
-        IfLe(_) => todo!(),
+        IfEq(index) => {
+            let left: StackItem = stack.pop()?;
+            let right: StackItem = StackItem::Value(Value::Integer(0));
+            stms.push(AST::Condition {
+                left,
+                right,
+                ty: ConditionType::Equal,
+                jump_index: *index,
+            })
+        }
+        IfNe(index) => {
+            let left: StackItem = stack.pop()?;
+            let right: StackItem = StackItem::Value(Value::Integer(0));
+            stms.push(AST::Condition {
+                left,
+                right,
+                ty: ConditionType::NotEqual,
+                jump_index: *index,
+            })
+        }
+        IfLt(index) => {
+            let left: StackItem = stack.pop()?;
+            let right: StackItem = StackItem::Value(Value::Integer(0));
+            stms.push(AST::Condition {
+                left,
+                right,
+                ty: ConditionType::LessThan,
+                jump_index: *index,
+            })
+        }
+        IfLe(index) => {
+            let left: StackItem = stack.pop()?;
+            let right: StackItem = StackItem::Value(Value::Integer(0));
+            stms.push(AST::Condition {
+                left,
+                right,
+                ty: ConditionType::LessThanOrEqual,
+                jump_index: *index,
+            })
+        }
+        IfGe(index) => {
+            let left: StackItem = stack.pop()?;
+            let right: StackItem = StackItem::Value(Value::Integer(0));
+            stms.push(AST::Condition {
+                left,
+                right,
+                ty: ConditionType::GreaterThanOrEqual,
+                jump_index: *index,
+            })
+        }
+        IfGt(index) => {
+            let left: StackItem = stack.pop()?;
+            let right: StackItem = StackItem::Value(Value::Integer(0));
+            stms.push(AST::Condition {
+                left,
+                right,
+                ty: ConditionType::GreaterThan,
+                jump_index: *index,
+            })
+        }
 
-        Goto(_) => todo!(),
-        JSr(_) => todo!(),
-        Ret(_) => todo!(),
-        Nop => todo!(),
+        JSr(index) => stack.push(StackItem::Jsr(*index)),
+        Ret(index) => stack.push(StackItem::Ret(*index)),
+
+        Goto(_) | Nop => {}
     }
 
     Ok(())

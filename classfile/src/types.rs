@@ -5,7 +5,7 @@ use nom::{
     combinator::{map, value},
     multi::{many0, many1_count},
     sequence::{delimited, tuple},
-    IResult,
+    AsChar, IResult,
 };
 use std::fmt::Display;
 
@@ -64,6 +64,16 @@ pub enum FieldDesc<'a> {
         ty: Box<FieldDesc<'a>>,
     },
     Void,
+}
+
+impl FieldDesc<'_> {
+    pub fn category(&self) -> u8 {
+        match self {
+            FieldDesc::Double | FieldDesc::Long => 2,
+            FieldDesc::Void => 0,
+            _ => 1,
+        }
+    }
 }
 
 impl Display for FieldDesc<'_> {

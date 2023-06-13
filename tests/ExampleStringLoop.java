@@ -15,7 +15,7 @@ public class ExampleStringLoop {
         int limit = 1000;
         for (int i = 0; i < limit; i++) {
             builder.append("This is a string");
-            builder.append('\n');
+            builder = builder.append('\n');
         }
 
         builder.reverse();

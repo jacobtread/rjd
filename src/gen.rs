@@ -117,7 +117,6 @@ pub enum StackItem<'a> {
         left: Box<StackItem<'a>>,
     },
     Call(Call<'a>),
-    CallStatic(CallStatic<'a>),
     /// Represents getting a local variable on the stack
     GetLocal {
         /// The index of the local variable
@@ -202,6 +201,31 @@ pub enum StackItem<'a> {
     Ret(u16),
 }
 
+impl<'a> StackItem<'a> {
+    fn category(&self) -> u8 {
+        // check if this is actually right
+        match self {
+            StackItem::Value(value) => value.category(),
+            StackItem::LiteralCast { cast_to, .. } => cast_to.category(),
+            StackItem::Operation { right, .. } => right.category(),
+            StackItem::GetLocal { ty, .. } => ty.category(),
+            StackItem::GetField { field, .. } => field.descriptor.category(),
+            StackItem::GetFieldStatic { field } => field.descriptor.category(),
+            StackItem::ArrayLength { .. } => 1,
+            StackItem::ArrayLoad { reference, .. } => reference.category(),
+            StackItem::Negated { value } => value.category(),
+            _ => 1,
+        }
+    }
+
+    fn statement(self) -> Option<AST<'a>> {
+        match self {
+            StackItem::Call(call) => Some(AST::Call(call)),
+            _ => None,
+        }
+    }
+}
+
 /// Represents a literal/constant/reference on the stack
 #[derive(Debug, Clone)]
 pub enum Value<'a> {
@@ -217,6 +241,19 @@ pub enum Value<'a> {
     Long(i64),
     /// Literal double value
     Double(f64),
+}
+
+impl Value<'_> {
+    fn category(&self) -> u8 {
+        match self {
+            Value::Null => 1,
+            Value::String(_) => 3,
+            Value::Integer(_) => 1,
+            Value::Float(_) => 1,
+            Value::Long(_) => 2,
+            Value::Double(_) => 2,
+        }
+    }
 }
 
 /// Different operation types
@@ -245,16 +282,8 @@ pub struct Call<'a> {
     /// Details about the actual method
     pub method: Methodref<'a>,
     /// Stack reference to the method object
-    pub reference: Box<StackItem<'a>>,
-    /// Stack items for the method arguments
-    pub args: Vec<StackItem<'a>>,
-}
-
-/// Represents a static method call
-#[derive(Debug, Clone)]
-pub struct CallStatic<'a> {
-    /// Details about the actual method
-    pub method: Methodref<'a>,
+    /// (This is none if the call is static)
+    pub reference: Option<Box<StackItem<'a>>>,
     /// Stack items for the method arguments
     pub args: Vec<StackItem<'a>>,
 }
@@ -267,6 +296,18 @@ pub enum LocalVariableType {
     Float,
     Double,
     Reference,
+}
+
+impl LocalVariableType {
+    fn category(&self) -> u8 {
+        match self {
+            LocalVariableType::Int => 1,
+            LocalVariableType::Long => 2,
+            LocalVariableType::Float => 1,
+            LocalVariableType::Double => 2,
+            LocalVariableType::Reference => 1,
+        }
+    }
 }
 
 /// Represents the operand stack
@@ -301,6 +342,28 @@ impl<'a> Stack<'a> {
         self.inner.push(value);
     }
 
+    pub fn pop_use(&mut self, stms: &mut Vec<AST<'a>>) -> StackResult<()> {
+        let value = self.pop()?;
+        if let Some(stmt) = value.statement() {
+            stms.push(stmt)
+        }
+        Ok(())
+    }
+
+    pub fn pop2_use(&mut self, stms: &mut Vec<AST<'a>>) -> StackResult<()> {
+        let cat = self
+            .inner
+            .last()
+            .map(|value| value.category())
+            .ok_or(StackError::Empty)?;
+
+        if cat == 1 {
+            self.pop_use(stms)?;
+        }
+
+        self.pop_use(stms)
+    }
+
     fn push_value(&mut self, value: Value<'a>) {
         self.inner.push(StackItem::Value(value));
     }
@@ -328,15 +391,42 @@ impl<'a> Stack<'a> {
         Ok(())
     }
 
+    // Duplicate last value inserting it before the last value
     fn dup_x1(&mut self) -> StackResult<()> {
-        let value = self.clone_last()?;
-        self.inner.insert(self.inner.len() - 2, value);
+        let length = self.inner.len();
+        if length < 2 {
+            return Err(StackError::NotEnough {
+                required: 2,
+                length,
+            });
+        }
+
+        // Duplicate the last value
+        let value = self.inner[length - 1].clone();
+        // Insert it before the last value
+        self.inner.insert(length - 2, value);
         Ok(())
     }
 
     fn dup_x2(&mut self) -> StackResult<()> {
-        let value = self.clone_last()?;
-        self.inner.insert(self.inner.len() - 3, value);
+        let length = self.inner.len();
+        if length < 2 {
+            return Err(StackError::NotEnough {
+                required: 2,
+                length,
+            });
+        }
+
+        // Duplicate the last value
+        let value = self.inner[length - 1].clone();
+
+        let last_x2 = &self.inner[length - 2];
+        if last_x2.category() == 2 {
+            self.inner.insert(length - 2, value);
+        } else {
+            self.inner.insert(length - 3, value);
+        }
+
         Ok(())
     }
 
@@ -349,11 +439,16 @@ impl<'a> Stack<'a> {
             });
         }
 
-        let a = self.inner[length - 1].clone();
-        let b = self.inner[length - 2].clone();
+        let last = self.inner[length - 1].clone();
 
-        self.push(a);
-        self.push(b);
+        if last.category() == 2 {
+            self.push(last);
+        } else {
+            let last_x2 = self.inner[length - 2].clone();
+            self.push(last);
+            self.push(last_x2);
+        }
+
         Ok(())
     }
 
@@ -366,11 +461,23 @@ impl<'a> Stack<'a> {
             });
         }
 
-        let a = self.inner[length - 1].clone();
-        let b = self.inner[length - 2].clone();
+        let last = self.inner[length - 1].clone();
 
-        self.inner.insert(length - 2, a);
-        self.inner.insert(length - 3, b);
+        if last.category() == 2 {
+            self.inner.insert(length - 2, last);
+        } else {
+            if length < 3 {
+                return Err(StackError::NotEnough {
+                    required: 3,
+                    length,
+                });
+            }
+
+            let last_x2 = self.inner[length - 2].clone();
+
+            self.inner.insert(length - 3, last);
+            self.inner.insert(length - 3, last_x2);
+        }
 
         Ok(())
     }
@@ -384,19 +491,30 @@ impl<'a> Stack<'a> {
             });
         }
 
-        let a = self.inner[length - 1].clone();
-        let b = self.inner[length - 2].clone();
+        let last = self.inner[length - 1].clone();
+        let last_x2 = &self.inner[length - 2];
 
-        self.inner.insert(length - 3, a);
-        self.inner.insert(length - 4, b);
-
-        Ok(())
-    }
-
-    fn pop2(&mut self) -> StackResult<()> {
-        let top = self.pop()?;
-        if !matches!(top, StackItem::Value(Value::Double(_) | Value::Long(_))) {
-            self.pop()?;
+        if last.category() == 2 {
+            if last_x2.category() == 2 {
+                self.inner.insert(length - 2, last);
+            } else {
+                self.inner.insert(length - 3, last);
+            }
+        } else {
+            if length < 3 {
+                return Err(StackError::NotEnough {
+                    required: 3,
+                    length,
+                });
+            }
+            let last_x3 = &self.inner[length - 3];
+            if last_x3.category() == 2 {
+                self.inner.insert(length - 3, last_x2.clone());
+                self.inner.insert(length - 3, last);
+            } else {
+                self.inner.insert(length - 4, last_x2.clone());
+                self.inner.insert(length - 4, last);
+            }
         }
 
         Ok(())
@@ -419,7 +537,6 @@ impl<'a> Stack<'a> {
 #[derive(Debug)]
 pub enum AST<'a> {
     Call(Call<'a>),
-    CallStatic(CallStatic<'a>),
     Return {
         /// Value returned (None if void)
         value: Option<StackItem<'a>>,
@@ -542,8 +659,8 @@ fn process<'a>(
         Swap => stack.swap()?,
 
         // Popping
-        Pop => stack.pop_discard()?,
-        Pop2 => stack.pop2()?,
+        Pop => stack.pop_use(stms)?,
+        Pop2 => stack.pop2_use(stms)?,
 
         // Cast checking
         CheckCast(index) => {
@@ -595,6 +712,7 @@ fn process<'a>(
                     Value::String(value)
                 }
 
+                // TODO: THIS IS SUPPOSED TO INCLUDE THE OTHER TYPES TOO
                 _ => return Err(ProcessError::InvalidConstantIndex(*index)),
             };
 
@@ -636,8 +754,9 @@ fn process<'a>(
                 .get_methodref(*index)
                 .ok_or(ProcessError::InvalidMethodref(*index))?;
 
-            let mut args = Vec::with_capacity(method.descriptor.parameters.len());
-            for _ in 0..args.len() {
+            let args_len = method.descriptor.parameters.len();
+            let mut args = Vec::with_capacity(args_len);
+            for _ in 0..args_len {
                 args.push(stack.pop()?);
             }
             args.reverse();
@@ -647,10 +766,8 @@ fn process<'a>(
             let call = Call {
                 args,
                 method,
-                reference,
+                reference: Some(reference),
             };
-
-            // TODO: FIGURE OUT IF THIS CALL SHOULD BE PUSHING STACK or AST
 
             // Non return types should end up on the stack
             if !matches!(&call.method.descriptor.return_type, FieldDesc::Void) {
@@ -664,20 +781,23 @@ fn process<'a>(
                 .get_methodref(*index)
                 .ok_or(ProcessError::InvalidMethodref(*index))?;
 
-            let mut args = Vec::with_capacity(method.descriptor.parameters.len());
-            for _ in 0..args.len() {
+            let args_len = method.descriptor.parameters.len();
+            let mut args = Vec::with_capacity(args_len);
+            for _ in 0..args_len {
                 args.push(stack.pop()?);
             }
             args.reverse();
-            let call = CallStatic { args, method };
-
-            // TODO: FIGURE OUT IF THIS CALL SHOULD BE PUSHING STACK or AST
+            let call = Call {
+                args,
+                method,
+                reference: None,
+            };
 
             // Non return types should end up on the stack
             if !matches!(&call.method.descriptor.return_type, FieldDesc::Void) {
-                stack.push(StackItem::CallStatic(call))
+                stack.push(StackItem::Call(call))
             } else {
-                stms.push(AST::CallStatic(call))
+                stms.push(AST::Call(call))
             }
         }
 

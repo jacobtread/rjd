@@ -109,12 +109,12 @@ pub enum StackItem<'a> {
 
     /// Represents an operation between two stack items
     Operation {
-        /// The left hand side of the operation
-        left: Box<StackItem<'a>>,
-        /// The type of operation
-        ty: OperationType,
         /// The right hand side of the operation
         right: Box<StackItem<'a>>,
+        /// The type of operation
+        ty: OperationType,
+        /// The left hand side of the operation
+        left: Box<StackItem<'a>>,
     },
     Call(Call<'a>),
     CallStatic(CallStatic<'a>),
@@ -426,7 +426,7 @@ pub enum AST<'a> {
     },
     /// Conditional statement with a jump to another block
     Condition {
-        /// Left hand side of the condition (TODO: I think i need to reverse left and right)
+        /// Left hand side of the condition
         left: StackItem<'a>,
         /// Right hand side of the condition
         right: StackItem<'a>,
@@ -764,122 +764,144 @@ fn process<'a>(
 
         // Adding
         IAdd | LAdd | FAdd | DAdd => {
-            let left: Box<StackItem> = stack.pop_boxed()?;
             let right: Box<StackItem> = stack.pop_boxed()?;
+            let left: Box<StackItem> = stack.pop_boxed()?;
             stack.push(StackItem::Operation {
-                left,
-                ty: OperationType::Add,
                 right,
+                ty: OperationType::Add,
+                left,
             })
         }
 
         // Subtracting
         ISub | LSub | FSub | DSub => {
-            let left: Box<StackItem> = stack.pop_boxed()?;
             let right: Box<StackItem> = stack.pop_boxed()?;
+            let left: Box<StackItem> = stack.pop_boxed()?;
             stack.push(StackItem::Operation {
-                left,
-                ty: OperationType::Subtract,
                 right,
+                ty: OperationType::Subtract,
+                left,
             })
         }
 
         // Dividing
         IDiv | LDiv | FDiv | DDiv => {
-            let left: Box<StackItem> = stack.pop_boxed()?;
             let right: Box<StackItem> = stack.pop_boxed()?;
+            let left: Box<StackItem> = stack.pop_boxed()?;
             stack.push(StackItem::Operation {
-                left,
-                ty: OperationType::Divide,
                 right,
+                ty: OperationType::Divide,
+                left,
             })
         }
 
         // Multiplying
         IMul | LMul | FMul | DMul => {
-            let left: Box<StackItem> = stack.pop_boxed()?;
             let right: Box<StackItem> = stack.pop_boxed()?;
+            let left: Box<StackItem> = stack.pop_boxed()?;
             stack.push(StackItem::Operation {
-                left,
-                ty: OperationType::Muliply,
                 right,
+                ty: OperationType::Muliply,
+                left,
             })
         }
 
         // Remainder
         IRem | LRem | FRem | DRem => {
-            let left: Box<StackItem> = stack.pop_boxed()?;
             let right: Box<StackItem> = stack.pop_boxed()?;
+            let left: Box<StackItem> = stack.pop_boxed()?;
             stack.push(StackItem::Operation {
-                left,
-                ty: OperationType::Remainder,
                 right,
+                ty: OperationType::Remainder,
+                left,
             })
         }
 
         // Bitwise And
         IAnd | LAnd => {
-            let left: Box<StackItem> = stack.pop_boxed()?;
             let right: Box<StackItem> = stack.pop_boxed()?;
+            let left: Box<StackItem> = stack.pop_boxed()?;
             stack.push(StackItem::Operation {
-                left,
-                ty: OperationType::BitwiseAnd,
                 right,
+                ty: OperationType::BitwiseAnd,
+                left,
             })
         }
 
         // | Bitwise OR operation
         LOr | IOr => {
-            let left: Box<StackItem> = stack.pop_boxed()?;
             let right: Box<StackItem> = stack.pop_boxed()?;
+            let left: Box<StackItem> = stack.pop_boxed()?;
             stack.push(StackItem::Operation {
-                left,
-                ty: OperationType::BitwiseOr,
                 right,
+                ty: OperationType::BitwiseOr,
+                left,
             })
         }
 
         // ^ XOR operation
         LXOr | IXOr => {
-            let left: Box<StackItem> = stack.pop_boxed()?;
             let right: Box<StackItem> = stack.pop_boxed()?;
+            let left: Box<StackItem> = stack.pop_boxed()?;
             stack.push(StackItem::Operation {
-                left,
-                ty: OperationType::Xor,
                 right,
+                ty: OperationType::Xor,
+                left,
             })
         }
 
         // << Bitwise shift left operation
         IShL | LShL => {
-            let left: Box<StackItem> = stack.pop_boxed()?;
             let right: Box<StackItem> = stack.pop_boxed()?;
+            let left: Box<StackItem> = stack.pop_boxed()?;
             stack.push(StackItem::Operation {
-                left,
-                ty: OperationType::BitwiseShl,
                 right,
+                ty: OperationType::BitwiseShl,
+                left,
             })
         }
 
         // >> Bitwise shift right operation
         IShR | LShR => {
-            let left: Box<StackItem> = stack.pop_boxed()?;
             let right: Box<StackItem> = stack.pop_boxed()?;
+            let left: Box<StackItem> = stack.pop_boxed()?;
             stack.push(StackItem::Operation {
-                left,
-                ty: OperationType::BitwiseShr,
                 right,
+                ty: OperationType::BitwiseShr,
+                left,
             })
         }
 
         // >>> Logical shift right operation
         IUShR | LUShR => {
-            let left: Box<StackItem> = stack.pop_boxed()?;
             let right: Box<StackItem> = stack.pop_boxed()?;
+            let left: Box<StackItem> = stack.pop_boxed()?;
             stack.push(StackItem::Operation {
-                left,
-                ty: OperationType::LogicalShr,
                 right,
+                ty: OperationType::LogicalShr,
+                left,
+            })
+        }
+
+        // < Less than comparison (float, double)
+        FCmpL | DCmpL => {
+            let right: Box<StackItem> = stack.pop_boxed()?;
+            let left: Box<StackItem> = stack.pop_boxed()?;
+            stack.push(StackItem::Operation {
+                right,
+                ty: OperationType::CompareLess,
+                left,
+            })
+        }
+
+        // > Greater than comparison (float, double)
+        FCmpG | DCmpG => {
+            let right: Box<StackItem> = stack.pop_boxed()?;
+            let left: Box<StackItem> = stack.pop_boxed()?;
+            stack.push(StackItem::Operation {
+                right,
+                ty: OperationType::CompareGreater,
+                left,
             })
         }
 
@@ -887,28 +909,6 @@ fn process<'a>(
         INeg | LNeg | FNeg | DNeg => {
             let value = stack.pop_boxed()?;
             stack.push(StackItem::Negated { value })
-        }
-
-        // < Less than comparison (float, double)
-        FCmpL | DCmpL => {
-            let left: Box<StackItem> = stack.pop_boxed()?;
-            let right: Box<StackItem> = stack.pop_boxed()?;
-            stack.push(StackItem::Operation {
-                left,
-                ty: OperationType::CompareLess,
-                right,
-            })
-        }
-
-        // > Greater than comparison (float, double)
-        FCmpG | DCmpG => {
-            let left: Box<StackItem> = stack.pop_boxed()?;
-            let right: Box<StackItem> = stack.pop_boxed()?;
-            stack.push(StackItem::Operation {
-                left,
-                ty: OperationType::CompareGreater,
-                right,
-            })
         }
 
         // Int casting
@@ -1054,21 +1054,21 @@ fn process<'a>(
 
         // Reference compare
         IfACmpEq(index) => {
-            let left: StackItem = stack.pop()?;
             let right: StackItem = stack.pop()?;
+            let left: StackItem = stack.pop()?;
             stms.push(AST::Condition {
-                left,
                 right,
+                left,
                 ty: ConditionType::Equal,
                 jump_index: *index,
             })
         }
         IfACmpNe(index) => {
-            let left: StackItem = stack.pop()?;
             let right: StackItem = stack.pop()?;
+            let left: StackItem = stack.pop()?;
             stms.push(AST::Condition {
-                left,
                 right,
+                left,
                 ty: ConditionType::NotEqual,
                 jump_index: *index,
             })
@@ -1076,62 +1076,62 @@ fn process<'a>(
 
         // Int compare
         IfICmpEq(index) => {
-            let left: StackItem = stack.pop()?;
             let right: StackItem = stack.pop()?;
+            let left: StackItem = stack.pop()?;
             stms.push(AST::Condition {
-                left,
                 right,
+                left,
                 ty: ConditionType::Equal,
                 jump_index: *index,
             })
         }
         IfICmpNe(index) => {
-            let left: StackItem = stack.pop()?;
             let right: StackItem = stack.pop()?;
+            let left: StackItem = stack.pop()?;
             stms.push(AST::Condition {
-                left,
                 right,
+                left,
                 ty: ConditionType::NotEqual,
                 jump_index: *index,
             })
         }
         IfICmpLt(index) => {
-            let left: StackItem = stack.pop()?;
             let right: StackItem = stack.pop()?;
+            let left: StackItem = stack.pop()?;
             stms.push(AST::Condition {
-                left,
                 right,
+                left,
                 ty: ConditionType::LessThan,
                 jump_index: *index,
             })
         }
         IfICmpLe(index) => {
-            let left: StackItem = stack.pop()?;
             let right: StackItem = stack.pop()?;
+            let left: StackItem = stack.pop()?;
             stms.push(AST::Condition {
-                left,
                 right,
+                left,
                 ty: ConditionType::LessThanOrEqual,
                 jump_index: *index,
             })
         }
         IfICmpGt(index) => {
-            let left: StackItem = stack.pop()?;
             let right: StackItem = stack.pop()?;
+            let left: StackItem = stack.pop()?;
             stms.push(AST::Condition {
-                left,
                 right,
+                left,
                 ty: ConditionType::GreaterThan,
                 jump_index: *index,
             })
         }
 
         IfICmpGe(index) => {
-            let left: StackItem = stack.pop()?;
             let right: StackItem = stack.pop()?;
+            let left: StackItem = stack.pop()?;
             stms.push(AST::Condition {
-                left,
                 right,
+                left,
                 ty: ConditionType::GreaterThanOrEqual,
                 jump_index: *index,
             })
@@ -1139,32 +1139,32 @@ fn process<'a>(
 
         // Long compare
         LCmp => {
-            let left = stack.pop_boxed()?;
             let right = stack.pop_boxed()?;
+            let left = stack.pop_boxed()?;
             stack.push(StackItem::Operation {
-                left,
-                ty: OperationType::SignedCompare,
                 right,
+                ty: OperationType::SignedCompare,
+                left,
             })
         }
 
         // Null compare
         IfNull(index) => {
-            let left: StackItem = stack.pop()?;
-            let right: StackItem = StackItem::Value(Value::Null);
+            let right: StackItem = stack.pop()?;
+            let left: StackItem = StackItem::Value(Value::Null);
             stms.push(AST::Condition {
-                left,
                 right,
+                left,
                 ty: ConditionType::Equal,
                 jump_index: *index,
             })
         }
         IfNonNull(index) => {
-            let left: StackItem = stack.pop()?;
-            let right: StackItem = StackItem::Value(Value::Null);
+            let right: StackItem = stack.pop()?;
+            let left: StackItem = StackItem::Value(Value::Null);
             stms.push(AST::Condition {
-                left,
                 right,
+                left,
                 ty: ConditionType::NotEqual,
                 jump_index: *index,
             })
@@ -1172,61 +1172,61 @@ fn process<'a>(
 
         // Int zero compare
         IfEq(index) => {
-            let left: StackItem = stack.pop()?;
-            let right: StackItem = StackItem::Value(Value::Integer(0));
+            let right: StackItem = stack.pop()?;
+            let left: StackItem = StackItem::Value(Value::Integer(0));
             stms.push(AST::Condition {
-                left,
                 right,
+                left,
                 ty: ConditionType::Equal,
                 jump_index: *index,
             })
         }
         IfNe(index) => {
-            let left: StackItem = stack.pop()?;
-            let right: StackItem = StackItem::Value(Value::Integer(0));
+            let right: StackItem = stack.pop()?;
+            let left: StackItem = StackItem::Value(Value::Integer(0));
             stms.push(AST::Condition {
-                left,
                 right,
+                left,
                 ty: ConditionType::NotEqual,
                 jump_index: *index,
             })
         }
         IfLt(index) => {
-            let left: StackItem = stack.pop()?;
-            let right: StackItem = StackItem::Value(Value::Integer(0));
+            let right: StackItem = stack.pop()?;
+            let left: StackItem = StackItem::Value(Value::Integer(0));
             stms.push(AST::Condition {
-                left,
                 right,
+                left,
                 ty: ConditionType::LessThan,
                 jump_index: *index,
             })
         }
         IfLe(index) => {
-            let left: StackItem = stack.pop()?;
-            let right: StackItem = StackItem::Value(Value::Integer(0));
+            let right: StackItem = stack.pop()?;
+            let left: StackItem = StackItem::Value(Value::Integer(0));
             stms.push(AST::Condition {
-                left,
                 right,
+                left,
                 ty: ConditionType::LessThanOrEqual,
                 jump_index: *index,
             })
         }
         IfGe(index) => {
-            let left: StackItem = stack.pop()?;
-            let right: StackItem = StackItem::Value(Value::Integer(0));
+            let right: StackItem = stack.pop()?;
+            let left: StackItem = StackItem::Value(Value::Integer(0));
             stms.push(AST::Condition {
-                left,
                 right,
+                left,
                 ty: ConditionType::GreaterThanOrEqual,
                 jump_index: *index,
             })
         }
         IfGt(index) => {
-            let left: StackItem = stack.pop()?;
-            let right: StackItem = StackItem::Value(Value::Integer(0));
+            let right: StackItem = stack.pop()?;
+            let left: StackItem = StackItem::Value(Value::Integer(0));
             stms.push(AST::Condition {
-                left,
                 right,
+                left,
                 ty: ConditionType::GreaterThan,
                 jump_index: *index,
             })

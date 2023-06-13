@@ -1,3 +1,5 @@
+use std::fmt::Display;
+
 use nom::{
     bytes::complete::take,
     combinator::{fail, map},
@@ -22,6 +24,21 @@ pub enum ArrayType {
     Short = 9,
     Int = 10,
     Long = 11,
+}
+
+impl Display for ArrayType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            ArrayType::Boolean => "boolean",
+            ArrayType::Char => "char",
+            ArrayType::Float => "float",
+            ArrayType::Double => "double",
+            ArrayType::Byte => "byte",
+            ArrayType::Short => "short",
+            ArrayType::Int => "int",
+            ArrayType::Long => "long",
+        })
+    }
 }
 
 fn array_type(input: &[u8]) -> IResult<&[u8], ArrayType> {

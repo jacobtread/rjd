@@ -1,4 +1,7 @@
-use std::collections::HashMap;
+use std::{
+    collections::HashMap,
+    fmt::{Display, Write},
+};
 
 use classfile::{
     attributes::{BorrowedInstrSet, InstructionSet},
@@ -11,8 +14,8 @@ use thiserror::Error;
 /// Block of instructions
 #[derive(Debug)]
 pub struct Block<'set> {
-    instructions: BorrowedInstrSet<'set>,
-    branches: Vec<usize>,
+    pub instructions: BorrowedInstrSet<'set>,
+    pub branches: Vec<usize>,
 }
 
 impl<'set> Block<'set> {
@@ -201,6 +204,42 @@ pub enum StackItem<'a> {
     Ret(u16),
 }
 
+impl Display for StackItem<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            StackItem::Value(value) => value.fmt(f),
+            StackItem::LiteralCast { value, cast_to } => write!(f, "({}){}", cast_to, value),
+            StackItem::CheckedCast { value, cast_to } => write!(f, "({}){}", cast_to.class, value),
+            StackItem::Operation { right, ty, left } => write!(f, "{} {} {}", left, ty, right),
+            StackItem::Call(call) => call.fmt(f),
+            StackItem::GetLocal { index, .. } => write!(f, "var{}", index),
+            StackItem::GetField { field, reference } => write!(f, "{}.{}", reference, field.name),
+            StackItem::GetFieldStatic { field } => {
+                write!(f, "{}.{}", field.class.class, field.name)
+            }
+            StackItem::ArrayLength { reference } => write!(f, "{}.length", reference),
+            StackItem::ArrayLoad { reference, index } => write!(f, "{}[{}]", reference, index),
+            StackItem::Negated { value } => write!(f, "-({})", value),
+            StackItem::New { class } => write!(f, "new {}()", class.class),
+            StackItem::NewArray { count, ty } => write!(f, "{}[{}]", ty, count),
+            StackItem::ANewArray { count, class } => write!(f, "{}[{}]", class.class, count),
+            StackItem::MultiANewArray { counts, class } => {
+                class.class.fmt(f)?;
+                for count in counts {
+                    write!(f, "[{}]", count)?;
+                }
+                Ok(())
+            }
+            StackItem::InstanceOf { value, class } => {
+                write!(f, "{} instanceof {}", value, class.class)
+            }
+            StackItem::Thrown { value } => write!(f, "throw {};", value),
+            StackItem::Jsr(value) => write!(f, "JSR {:#X}", value),
+            StackItem::Ret(value) => write!(f, "RET {:#X}", value),
+        }
+    }
+}
+
 impl<'a> StackItem<'a> {
     fn category(&self) -> u8 {
         // check if this is actually right
@@ -256,6 +295,19 @@ impl Value<'_> {
     }
 }
 
+impl Display for Value<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Value::Null => f.write_str("null"),
+            Value::String(value) => write!(f, "\"{}\"", value),
+            Value::Integer(value) => value.fmt(f),
+            Value::Float(value) => value.fmt(f),
+            Value::Long(value) => value.fmt(f),
+            Value::Double(value) => value.fmt(f),
+        }
+    }
+}
+
 /// Different operation types
 #[derive(Debug, Clone)]
 pub enum OperationType {
@@ -273,7 +325,27 @@ pub enum OperationType {
     BitwiseShr,
     LogicalShr,
     Remainder,
-    InstanceOf,
+}
+
+impl Display for OperationType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            OperationType::Muliply => f.write_char('*'),
+            OperationType::Divide => f.write_char('/'),
+            OperationType::Subtract => f.write_char('-'),
+            OperationType::Add => f.write_char('+'),
+            OperationType::CompareGreater => f.write_char('>'),
+            OperationType::CompareLess => f.write_char('<'),
+            OperationType::SignedCompare => f.write_str("=="),
+            OperationType::Xor => f.write_char('^'),
+            OperationType::BitwiseAnd => f.write_char('&'),
+            OperationType::BitwiseOr => f.write_char('|'),
+            OperationType::BitwiseShl => f.write_str("<<"),
+            OperationType::BitwiseShr => f.write_str(">>"),
+            OperationType::LogicalShr => f.write_str(">>>"),
+            OperationType::Remainder => f.write_char('%'),
+        }
+    }
 }
 
 /// Represents a method call
@@ -286,6 +358,26 @@ pub struct Call<'a> {
     pub reference: Option<Box<StackItem<'a>>>,
     /// Stack items for the method arguments
     pub args: Vec<StackItem<'a>>,
+}
+
+impl Display for Call<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if let Some(reference) = &self.reference {
+            write!(f, "{}.{}(", reference, self.method.name)?;
+        } else {
+            write!(f, "{}.{}", self.method.class.class, self.method.name)?;
+        }
+
+        for i in 0..self.args.len() {
+            self.args[i].fmt(f)?;
+
+            if i + 1 != self.args.len() {
+                f.write_str(", ")?;
+            }
+        }
+
+        f.write_char(')')
+    }
 }
 
 /// Different value types for a local variabel
@@ -611,6 +703,69 @@ pub enum AST<'a> {
     Instruction(Instruction),
 }
 
+impl Display for AST<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AST::Call(call) => {
+                call.fmt(f)?;
+                f.write_char(';')
+            }
+            AST::Return { value } => {
+                f.write_str("return")?;
+                if let Some(value) = value {
+                    f.write_char(' ')?;
+                    value.fmt(f)?;
+                }
+                f.write_char(';')
+            }
+            AST::Condition {
+                left,
+                right,
+                ty,
+                jump_index,
+            } => {
+                write!(
+                    f,
+                    "if ({} {} {}) {{ GOTO: {} }}",
+                    left, ty, right, jump_index
+                )
+            }
+            AST::ArrayStore {
+                reference,
+                index,
+                value,
+            } => {
+                write!(f, "{}[{}] = {};", reference, index, value)
+            }
+            AST::PutField {
+                field,
+                reference,
+                value,
+            } => {
+                write!(f, "{}.{} = {};", reference, field.name, value)
+            }
+            AST::PutFieldStatic { field, value } => {
+                write!(f, "{}.{} = {};", field.class.class, field.name, value)
+            }
+            AST::SetLocal { index, value } => {
+                // TODO: Checking to see if the local is already defined for
+                // whether to use it + need type checking
+                write!(f, "var{} = {};", index, value)
+            }
+            AST::LocalIncrement { index, value } => {
+                // TODO: Checking to see if the local is already defined for
+                // whether to use it + need type checking
+                write!(f, "var{} += {};", index, value)
+            }
+            AST::InvokeDynamic(_) => todo!(),
+            AST::Thrown { value } => write!(f, "throw {};", value),
+            AST::LookupSwitch { key, data } => write!(f, "Lookup Switch: {} {:?} ", key, data),
+            AST::TableSwitch { index, data } => write!(f, "Table Switch: {} {:?} ", index, data),
+            AST::Instruction(value) => write!(f, "Failed parse: {:?}", value),
+        }
+    }
+}
+
 /// The type of condition
 #[derive(Debug)]
 pub enum ConditionType {
@@ -620,6 +775,19 @@ pub enum ConditionType {
     GreaterThanOrEqual,
     LessThan,
     LessThanOrEqual,
+}
+
+impl Display for ConditionType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            ConditionType::Equal => "==",
+            ConditionType::NotEqual => "!=",
+            ConditionType::GreaterThan => ">",
+            ConditionType::GreaterThanOrEqual => ">=",
+            ConditionType::LessThan => "<",
+            ConditionType::LessThanOrEqual => "<=",
+        })
+    }
 }
 
 /// Errors that could occur while processing instructions

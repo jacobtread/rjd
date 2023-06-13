@@ -4,6 +4,10 @@ public class ExampleStringLoop {
     public int[] exampleArray = new int[0];
     public int example = 0;
 
+    public ExampleStringLoop() {
+        
+    }
+
     public ExampleStringLoop(int[] values) {
         this.exampleArray = values;
     }

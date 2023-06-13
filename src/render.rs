@@ -1,11 +1,11 @@
 use std::fmt::{Debug, Display, Write};
 
 use classfile::{
-    attributes::Attribute,
+    attributes::{Attribute, BorrowedInstrSet},
     class::{AccessFlags, ClassFile},
 };
 
-use crate::gen::create_blocks;
+use crate::gen::{create_blocks, Block};
 
 struct JavaClassRenderer<'a> {
     class: ClassFile<'a>,
@@ -147,11 +147,21 @@ impl Display for JavaClassRenderer<'_> {
             for method in &class.methods {
                 f.write_str("  ")?;
                 method_flags_fmt(&method.access_flags, f)?;
-                write!(
-                    f,
-                    "{} {} () {{",
-                    &method.descriptor.return_type, &method.name
-                )?;
+                write!(f, "{} {} (", &method.descriptor.return_type, &method.name)?;
+
+                let param = &method.descriptor.parameters;
+
+                for i in 0..param.len() {
+                    let p = &param[i];
+
+                    write!(f, "{} var{}", p, i + 1)?;
+
+                    if i + 1 != param.len() {
+                        f.write_str(", ")?;
+                    }
+                }
+
+                f.write_str(") {")?;
                 f.write_char('\n')?;
 
                 let code = method.attributes.iter().find_map(|value| match value {
@@ -160,14 +170,42 @@ impl Display for JavaClassRenderer<'_> {
                 });
 
                 if let Some(code) = code {
-                    let blocks = create_blocks(&code.code);
+                    let block = Block {
+                        instructions: BorrowedInstrSet {
+                            inner: &code.code.inner,
+                        },
+                        branches: vec![],
+                    };
 
-                    for (_pos, block) in blocks {
-                        let result = block.decompile(&class.constant_pool);
-                        write!(f, "\nBlock{{\n{:#?}\n}}", result)?;
+                    // TODO: actually use indent
+
+                    let result = block.decompile(&class.constant_pool);
+                    match result {
+                        Ok(values) => {
+                            for value in values {
+                                writeln!(f, "    {}", value)?;
+                            }
+                        }
+                        Err(error) => {
+                            writeln!(f, "ERRR: {}", error)?;
+                        }
                     }
 
-                    f.write_char('\n')?;
+                    // let blocks = create_blocks(&code.code);
+
+                    // for (_pos, block) in blocks {
+                    //     let result = block.decompile(&class.constant_pool);
+                    //     match result {
+                    //         Ok(values) => {
+                    //             for value in values {
+                    //                 writeln!(f, "    {}", value)?;
+                    //             }
+                    //         }
+                    //         Err(error) => {
+                    //             writeln!(f, "ERRR: {}", error)?;
+                    //         }
+                    //     }
+                    // }
                 }
                 f.write_str("  }\n\n")?;
             }

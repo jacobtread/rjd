@@ -5,7 +5,10 @@ use classfile::{
     class::{AccessFlags, ClassFile},
 };
 
-use crate::gen::{create_blocks, Block};
+use crate::{
+    gen::{create_blocks, Block},
+    graph::model_control_flow,
+};
 
 struct JavaClassRenderer<'a> {
     class: ClassFile<'a>,
@@ -170,51 +173,29 @@ impl Display for JavaClassRenderer<'_> {
                 });
 
                 if let Some(code) = code {
-                    let block = Block {
-                        instructions: BorrowedInstrSet {
-                            inner: &code.code.inner,
-                        },
-                        start: 0,
-                        branches: vec![],
-                    };
+                    let flows = model_control_flow(&code.code);
 
-                    // TODO: actually use indent
-
-                    let result = block.decompile(&class.constant_pool);
-                    match result {
-                        Ok(values) => {
-                            for value in values {
-                                writeln!(f, "    {}", value)?;
-                            }
-                        }
-                        Err(error) => {
-                            writeln!(f, "ERRR: {}", error)?;
-                        }
-                    }
-
-                    f.write_str("\n\n START: ===============\n")?;
-
-                    let blocks = create_blocks(&code.code);
-                    if !blocks.is_empty() {
-                        for (start, block) in blocks {
-                            writeln!(f, "    {}:", start)?;
-
-                            let result = block.decompile(&class.constant_pool);
-                            match result {
-                                Ok(values) => {
-                                    for value in values {
-                                        writeln!(f, "      {}", value)?;
+                    if !flows.is_empty() {
+                        for flow in flows {
+                            writeln!(f, "  flow:")?;
+                            for block in flow {
+                                writeln!(f, "    block {}:", block.start)?;
+                                let result = block.decompile(&class.constant_pool);
+                                match result {
+                                    Ok(values) => {
+                                        for value in values {
+                                            writeln!(f, "      {}", value)?;
+                                        }
+                                    }
+                                    Err(error) => {
+                                        writeln!(f, "ERRR: {}", error)?;
                                     }
                                 }
-                                Err(error) => {
-                                    writeln!(f, "ERRR: {}", error)?;
-                                }
-                            }
 
-                            writeln!(f, "      branches: {:?}", &block.branches)?;
+                                writeln!(f, "      branches: {:?}", &block.branches)?;
+                            }
                         }
                     }
-                    f.write_str("\n\n END: ===============\n")?;
                 }
                 f.write_str("  }\n\n")?;
             }

@@ -14,3 +14,4 @@ thiserror = "1"
 strum = "0.24"
 strum_macros = "0.24"
 classfile = { path = "./classfile", version = "*" }
+petgraph = "0.6.3"

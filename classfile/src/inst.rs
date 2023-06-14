@@ -87,21 +87,13 @@ fn table_switch(input: &[u8], pos: i32) -> IResult<&[u8], Instruction> {
 
     Ok((
         input,
-        Instruction::TableSwitch(TableSwitchData {
+        Instruction::TableSwitch {
             default,
             low,
             high,
             offsets,
-        }),
+        },
     ))
-}
-
-#[derive(Debug, Clone)]
-pub struct TableSwitchData {
-    pub default: i32,
-    pub low: i32,
-    pub high: i32,
-    pub offsets: Vec<i32>,
 }
 
 fn lookup_switch(input: &[u8], pos: i32) -> IResult<&[u8], Instruction> {
@@ -114,16 +106,7 @@ fn lookup_switch(input: &[u8], pos: i32) -> IResult<&[u8], Instruction> {
 
     let pairs = pairs.into_iter().map(|(a, b)| (a, pos + b)).collect();
 
-    Ok((
-        input,
-        Instruction::LookupSwitch(LookupSwitchData { default, pairs }),
-    ))
-}
-
-#[derive(Debug, Clone)]
-pub struct LookupSwitchData {
-    pub default: i32,
-    pub pairs: Vec<(i32, i32)>,
+    Ok((input, Instruction::LookupSwitch { default, pairs }))
 }
 
 pub fn instruction(input: &[u8], wide: bool, pos: i32) -> IResult<&[u8], Instruction> {
@@ -242,15 +225,14 @@ pub fn instruction(input: &[u8], wide: bool, pos: i32) -> IResult<&[u8], Instruc
         0x83 => LXOr,
         0x84 => {
             return if wide {
-                map(tuple((be_u16, be_i16)), |(index, value)| {
-                    IInc(IIncData { index, value })
+                map(tuple((be_u16, be_i16)), |(index, value)| IInc {
+                    index,
+                    value,
                 })(input)
             } else {
-                map(tuple((u8, u8)), |(index, value)| {
-                    IInc(IIncData {
-                        index: index as u16,
-                        value: value as i16,
-                    })
+                map(tuple((u8, u8)), |(index, value)| IInc {
+                    index: index as u16,
+                    value: value as i16,
                 })(input)
             }
         }
@@ -333,8 +315,9 @@ pub fn instruction(input: &[u8], wide: bool, pos: i32) -> IResult<&[u8], Instruc
         0xc4 => return instruction(input, true, pos + 1),
 
         0xc5 => {
-            return map(tuple((be_u16, u8)), |(index, dimensions)| {
-                MultiANewArray(MultiANewArrayData { index, dimensions })
+            return map(tuple((be_u16, u8)), |(index, dimensions)| MultiANewArray {
+                index,
+                dimensions,
             })(input)
         }
 
@@ -352,22 +335,6 @@ pub fn instruction(input: &[u8], wide: bool, pos: i32) -> IResult<&[u8], Instruc
 /// Local variable indexes are stored as u16 rather than
 /// u8 in order to account for wide instructions
 type LocalVariableIndex = u16;
-
-#[derive(Debug, Clone)]
-pub struct IIncData {
-    /// The index of the local variable
-    pub index: LocalVariableIndex,
-    /// The value to add to the variable
-    pub value: i16,
-}
-
-#[derive(Debug, Clone)]
-pub struct MultiANewArrayData {
-    /// The index of the array object type in the constant pool
-    pub index: PoolIndex,
-    /// The number of dimensions the array has
-    pub dimensions: u8,
-}
 
 #[derive(Debug, Clone)]
 pub enum Instruction {
@@ -637,7 +604,12 @@ pub enum Instruction {
     IfNull(BranchIndex),
     /// Increment local variable by constant
     /// [... → ...]
-    IInc(IIncData),
+    IInc {
+        /// The index of the local variable
+        index: LocalVariableIndex,
+        /// The value to add to the variable
+        value: i16,
+    },
     /// Load int from local variable
     /// [... → ..., value]
     ILoad(LocalVariableIndex),
@@ -739,7 +711,10 @@ pub enum Instruction {
     LNeg,
     /// Access jump table by key match and jump
     /// [..., key → ...]
-    LookupSwitch(LookupSwitchData),
+    LookupSwitch {
+        default: i32,
+        pairs: Vec<(i32, i32)>,
+    },
     /// Boolean OR long
     /// [..., value1, value2 → ..., result]
     LOr,
@@ -775,7 +750,12 @@ pub enum Instruction {
     MonitorExit,
     /// Create new multidimensional array
     /// [..., count1, [count2, ...] → ..., arrayref]
-    MultiANewArray(MultiANewArrayData),
+    MultiANewArray {
+        /// The index of the array object type in the constant pool
+        index: PoolIndex,
+        /// The number of dimensions the array has
+        dimensions: u8,
+    },
     /// Create new object
     /// [... → ..., objectref]
     New(PoolIndex),
@@ -818,5 +798,10 @@ pub enum Instruction {
     Swap,
     /// Access jump table by index and jump
     /// [..., index → ...]
-    TableSwitch(TableSwitchData),
+    TableSwitch {
+        default: i32,
+        low: i32,
+        high: i32,
+        offsets: Vec<i32>,
+    },
 }

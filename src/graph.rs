@@ -11,7 +11,7 @@ pub fn model_control_flow(input: &InstructionSet) -> Vec<Vec<Block<'_>>> {
     let mut graph = DiGraphMap::new();
 
     // Create initial graph points
-    blocks.iter().for_each(|(pos, block)| {
+    blocks.iter().for_each(|(pos, _)| {
         graph.add_node(*pos);
     });
 

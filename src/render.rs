@@ -173,6 +173,28 @@ impl Display for JavaClassRenderer<'_> {
                 });
 
                 if let Some(code) = code {
+                    let block = Block {
+                        instructions: BorrowedInstrSet {
+                            inner: &code.code.inner,
+                        },
+                        start: 0,
+                        branches: vec![],
+                    };
+
+                    // TODO: actually use indent
+
+                    let result = block.decompile(&class.constant_pool);
+                    match result {
+                        Ok(values) => {
+                            for value in values {
+                                writeln!(f, "    {}", value)?;
+                            }
+                        }
+                        Err(error) => {
+                            writeln!(f, "ERRR: {}", error)?;
+                        }
+                    }
+
                     let flows = model_control_flow(&code.code);
 
                     if !flows.is_empty() {
@@ -219,7 +241,7 @@ mod test {
 
     #[test]
     fn test_render_class() {
-        let file = read("tests/ExampleStringLoop.class").unwrap();
+        let file = read("tests/ComplexFlow.class").unwrap();
         let (_, class_file) = parse_class_file(&file).unwrap();
 
         let render = JavaClassRenderer { class: class_file };

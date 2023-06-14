@@ -6,7 +6,7 @@ use std::{
 use classfile::{
     attributes::{BorrowedInstrSet, InstructionSet},
     constant_pool::{ConstantItem, ConstantPool, Fieldref, InvokeDynamic, Methodref, PoolIndex},
-    inst::{ArrayType, Instruction, LookupSwitchData, TableSwitchData},
+    inst::{ArrayType, Instruction},
     types::{Class, FieldDesc},
 };
 use thiserror::Error;
@@ -74,14 +74,14 @@ pub fn create_blocks(input: &InstructionSet) -> HashMap<usize, Block<'_>> {
                     branches.push(*branch as usize);
                 }
                 Return | AReturn | IReturn | LReturn | DReturn | FReturn => {}
-                TableSwitch(data) => {
-                    for offset in &data.offsets {
+                TableSwitch { offsets, .. } => {
+                    for offset in offsets {
                         let jump = *offset as usize;
                         branches.push(jump)
                     }
                 }
-                LookupSwitch(data) => {
-                    for (_, offset) in &data.pairs {
+                LookupSwitch { pairs, .. } => {
+                    for (_, offset) in pairs {
                         let jump = *offset as usize;
                         branches.push(jump)
                     }
@@ -706,12 +706,16 @@ pub enum AST<'a> {
     /// TODO: Should this be handled elsewhere?
     LookupSwitch {
         key: StackItem<'a>,
-        data: LookupSwitchData,
+        default: i32,
+        pairs: Vec<(i32, i32)>,
     },
     /// TODO: Should this be handled elsewhere?
     TableSwitch {
         index: StackItem<'a>,
-        data: TableSwitchData,
+        default: i32,
+        low: i32,
+        high: i32,
+        offsets: Vec<i32>,
     },
     /// Plain instruction fallback for errors
     Instruction(Instruction),
@@ -773,8 +777,8 @@ impl Display for AST<'_> {
             }
             AST::InvokeDynamic(_) => todo!(),
             AST::Thrown { value } => write!(f, "throw {};", value),
-            AST::LookupSwitch { key, data } => write!(f, "Lookup Switch: {} {:?} ", key, data),
-            AST::TableSwitch { index, data } => write!(f, "Table Switch: {} {:?} ", index, data),
+            AST::LookupSwitch { key, .. } => write!(f, "Lookup Switch: {}", key,),
+            AST::TableSwitch { index, .. } => write!(f, "Table Switch: {} ", index),
             AST::Instruction(value) => write!(f, "Failed parse: {:?}", value),
         }
     }
@@ -1272,18 +1276,27 @@ fn process<'a>(
         }
 
         // Switches
-        LookupSwitch(data) => {
-            let key = stack.pop()?;
+        LookupSwitch { default, pairs } => {
+            let key: StackItem = stack.pop()?;
             stms.push(AST::LookupSwitch {
                 key,
-                data: data.clone(),
+                default: *default,
+                pairs: pairs.clone(),
             })
         }
-        TableSwitch(data) => {
-            let index = stack.pop()?;
+        TableSwitch {
+            default,
+            low,
+            high,
+            offsets,
+        } => {
+            let index: StackItem = stack.pop()?;
             stms.push(AST::TableSwitch {
                 index,
-                data: data.clone(),
+                default: *default,
+                low: *low,
+                high: *high,
+                offsets: offsets.clone(),
             })
         }
 
@@ -1315,14 +1328,14 @@ fn process<'a>(
             let count: Box<StackItem> = stack.pop_boxed()?;
             stack.push(StackItem::ANewArray { count, class });
         }
-        MultiANewArray(data) => {
+        MultiANewArray { dimensions, index } => {
             let class_name: &str = pool
-                .get_class_name(data.index)
-                .ok_or(ProcessError::InvalidClassIndex(data.index))?;
+                .get_class_name(*index)
+                .ok_or(ProcessError::InvalidClassIndex(*index))?;
             let class: Class =
                 Class::try_parse(class_name).ok_or(ProcessError::InvalidClassName)?;
-            let mut counts: Vec<StackItem> = Vec::with_capacity(data.dimensions as usize);
-            for _ in 0..data.dimensions {
+            let mut counts: Vec<StackItem> = Vec::with_capacity(*dimensions as usize);
+            for _ in 0..*dimensions {
                 counts.push(stack.pop()?);
             }
             counts.reverse();
@@ -1343,9 +1356,9 @@ fn process<'a>(
         }
 
         // Incrementing
-        IInc(data) => stms.push(AST::LocalIncrement {
-            index: data.index,
-            value: data.value,
+        IInc { index, value } => stms.push(AST::LocalIncrement {
+            index: *index,
+            value: *value,
         }),
 
         // invoke dynamic

@@ -148,7 +148,7 @@ impl InstructionSet {
         self.inner
             .iter()
             .enumerate()
-            .for_each(|(index, (pos, instr))| {
+            .for_each(|(index, (_pos, instr))| {
                 use crate::inst::Instruction::*;
 
                 // TODO: Error handling instead of unwraps
@@ -165,14 +165,14 @@ impl InstructionSet {
                         let jump = self.index_of_position(*branch as usize).unwrap();
                         jumps.push(jump);
                     }
-                    TableSwitch(data) => {
-                        for offset in &data.offsets {
+                    TableSwitch { offsets, .. } => {
+                        for offset in offsets {
                             let jump = self.index_of_position(*offset as usize).unwrap();
                             jumps.push(jump)
                         }
                     }
-                    LookupSwitch(data) => {
-                        for (_, offset) in &data.pairs {
+                    LookupSwitch { pairs, .. } => {
+                        for (_, offset) in pairs {
                             let jump = self.index_of_position(*offset as usize).unwrap();
                             jumps.push(jump)
                         }

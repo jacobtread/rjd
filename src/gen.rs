@@ -4,7 +4,7 @@ use std::{
 };
 
 use classfile::{
-    attributes::{BorrowedInstrSet, InstructionSet},
+    attributes::{BorrowedInstrSet, InstructionSeq},
     constant_pool::{ConstantItem, ConstantPool, Fieldref, InvokeDynamic, Methodref, PoolIndex},
     inst::{ArrayType, Instruction},
     types::{Class, FieldDesc},
@@ -23,29 +23,29 @@ impl<'set> Block<'set> {
     pub fn decompile<'a, 'b: 'a>(
         &'b self,
         pool: &'b ConstantPool<'a>,
-    ) -> Result<Vec<AST<'a>>, ProcessError> {
+    ) -> Result<Vec<Exprent<'a>>, ProcessError> {
         let mut stack: Stack<'a> = Stack::default();
-        let mut ast: Vec<AST<'a>> = Vec::new();
+        let mut ast: Vec<Exprent<'a>> = Vec::new();
 
         let mut iter = self.instructions.inner.iter();
 
         for (_pos, instr) in iter.by_ref() {
             if let Err(err) = process(instr, pool, &mut stack, &mut ast) {
                 eprintln!("ERR: {:?}", err);
-                ast.push(AST::Instruction(instr.clone()));
+                ast.push(Exprent::Instruction(instr.clone()));
                 break;
             }
         }
 
         for (_pos, instr) in iter {
-            ast.push(AST::Instruction(instr.clone()))
+            ast.push(Exprent::Instruction(instr.clone()))
         }
 
         Ok(ast)
     }
 }
 
-pub fn create_blocks(input: &InstructionSet) -> HashMap<usize, Block<'_>> {
+pub fn create_blocks(input: &InstructionSeq) -> HashMap<usize, Block<'_>> {
     input
         .split_jumps()
         .into_iter()
@@ -271,9 +271,9 @@ impl<'a> StackItem<'a> {
         }
     }
 
-    fn statement(self) -> Option<AST<'a>> {
+    fn statement(self) -> Option<Exprent<'a>> {
         match self {
-            StackItem::Call(call) => Some(AST::Call(call)),
+            StackItem::Call(call) => Some(Exprent::Call(call)),
             _ => None,
         }
     }
@@ -448,7 +448,7 @@ impl<'a> Stack<'a> {
         self.inner.push(value);
     }
 
-    pub fn pop_use(&mut self, stms: &mut Vec<AST<'a>>) -> StackResult<()> {
+    pub fn pop_use(&mut self, stms: &mut Vec<Exprent<'a>>) -> StackResult<()> {
         let value = self.pop()?;
         if let Some(stmt) = value.statement() {
             stms.push(stmt)
@@ -456,7 +456,7 @@ impl<'a> Stack<'a> {
         Ok(())
     }
 
-    pub fn pop2_use(&mut self, stms: &mut Vec<AST<'a>>) -> StackResult<()> {
+    pub fn pop2_use(&mut self, stms: &mut Vec<Exprent<'a>>) -> StackResult<()> {
         let cat = self
             .inner
             .last()
@@ -640,11 +640,22 @@ impl<'a> Stack<'a> {
     }
 }
 
+/// Exit types
 #[derive(Debug)]
-pub enum AST<'a> {
+pub enum ExitType {
+    /// Method returned
+    Return,
+    /// Exception was thrown
+    Throw,
+}
+
+#[derive(Debug)]
+pub enum Exprent<'a> {
     Call(Call<'a>),
-    Return {
-        /// Value returned (None if void)
+    Exit {
+        /// Type of exit
+        ty: ExitType,
+        /// Value returned/thrown (None if void required for thrown types)
         value: Option<StackItem<'a>>,
     },
     /// Conditional statement with a jump to another block
@@ -698,11 +709,7 @@ pub enum AST<'a> {
         value: i16,
     },
     InvokeDynamic(InvokeDynamic),
-    /// Represents a thrown value
-    Thrown {
-        /// The value that was thrown
-        value: StackItem<'a>,
-    },
+
     /// TODO: Should this be handled elsewhere?
     LookupSwitch {
         key: StackItem<'a>,
@@ -721,22 +728,27 @@ pub enum AST<'a> {
     Instruction(Instruction),
 }
 
-impl Display for AST<'_> {
+impl Display for Exprent<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            AST::Call(call) => {
+            Exprent::Call(call) => {
                 call.fmt(f)?;
                 f.write_char(';')
             }
-            AST::Return { value } => {
-                f.write_str("return")?;
+            Exprent::Exit { ty, value } => {
+                if let ExitType::Return = ty {
+                    f.write_str("return")?;
+                } else {
+                    f.write_str("throw")?;
+                }
+
                 if let Some(value) = value {
                     f.write_char(' ')?;
                     value.fmt(f)?;
                 }
                 f.write_char(';')
             }
-            AST::Condition {
+            Exprent::Condition {
                 left,
                 right,
                 ty,
@@ -748,38 +760,37 @@ impl Display for AST<'_> {
                     left, ty, right, jump_index
                 )
             }
-            AST::ArrayStore {
+            Exprent::ArrayStore {
                 reference,
                 index,
                 value,
             } => {
                 write!(f, "{}[{}] = {};", reference, index, value)
             }
-            AST::PutField {
+            Exprent::PutField {
                 field,
                 reference,
                 value,
             } => {
                 write!(f, "{}.{} = {};", reference, field.name, value)
             }
-            AST::PutFieldStatic { field, value } => {
+            Exprent::PutFieldStatic { field, value } => {
                 write!(f, "{}.{} = {};", field.class.class, field.name, value)
             }
-            AST::SetLocal { index, value } => {
+            Exprent::SetLocal { index, value } => {
                 // TODO: Checking to see if the local is already defined for
                 // whether to use it + need type checking
                 write!(f, "var{} = {};", index, value)
             }
-            AST::LocalIncrement { index, value } => {
+            Exprent::LocalIncrement { index, value } => {
                 // TODO: Checking to see if the local is already defined for
                 // whether to use it + need type checking
                 write!(f, "var{} += {};", index, value)
             }
-            AST::InvokeDynamic(_) => todo!(),
-            AST::Thrown { value } => write!(f, "throw {};", value),
-            AST::LookupSwitch { key, .. } => write!(f, "Lookup Switch: {}", key,),
-            AST::TableSwitch { index, .. } => write!(f, "Table Switch: {} ", index),
-            AST::Instruction(value) => write!(f, "Failed parse: {:?}", value),
+            Exprent::InvokeDynamic(_) => todo!(),
+            Exprent::LookupSwitch { key, .. } => write!(f, "Lookup Switch: {}", key,),
+            Exprent::TableSwitch { index, .. } => write!(f, "Table Switch: {} ", index),
+            Exprent::Instruction(value) => write!(f, "Failed parse: {:?}", value),
         }
     }
 }
@@ -836,7 +847,7 @@ fn process<'a>(
     instruction: &Instruction,
     pool: &ConstantPool<'a>,
     stack: &mut Stack<'a>,
-    stms: &mut Vec<AST<'a>>,
+    stms: &mut Vec<Exprent<'a>>,
 ) -> Result<(), ProcessError> {
     use classfile::inst::Instruction::*;
 
@@ -868,7 +879,10 @@ fn process<'a>(
             stack.push(StackItem::Thrown {
                 value: Box::new(value.clone()),
             });
-            stms.push(AST::Thrown { value })
+            stms.push(Exprent::Exit {
+                value: Some(value),
+                ty: ExitType::Throw,
+            })
         }
 
         // Constant value pushes
@@ -909,7 +923,7 @@ fn process<'a>(
         AStore(index) | LStore(index) | IStore(index) | DStore(index) | FStore(index) => {
             let index = *index;
             let value = stack.pop()?;
-            stms.push(AST::SetLocal { index, value })
+            stms.push(Exprent::SetLocal { index, value })
         }
 
         // Local variable loading
@@ -959,7 +973,7 @@ fn process<'a>(
             if !matches!(&call.method.descriptor.return_type, FieldDesc::Void) {
                 stack.push(StackItem::Call(call))
             } else {
-                stms.push(AST::Call(call))
+                stms.push(Exprent::Call(call))
             }
         }
         InvokeStatic(index) => {
@@ -983,7 +997,7 @@ fn process<'a>(
             if !matches!(&call.method.descriptor.return_type, FieldDesc::Void) {
                 stack.push(StackItem::Call(call))
             } else {
-                stms.push(AST::Call(call))
+                stms.push(Exprent::Call(call))
             }
         }
 
@@ -996,7 +1010,7 @@ fn process<'a>(
             let value: StackItem = stack.pop()?;
             let reference: StackItem = stack.pop()?;
 
-            stms.push(AST::PutField {
+            stms.push(Exprent::PutField {
                 field,
                 reference,
                 value,
@@ -1009,7 +1023,7 @@ fn process<'a>(
 
             let value: StackItem = stack.pop()?;
 
-            stms.push(AST::PutFieldStatic { field, value })
+            stms.push(Exprent::PutFieldStatic { field, value })
         }
 
         // Retreiving from fields
@@ -1034,10 +1048,16 @@ fn process<'a>(
         }
 
         // Returning
-        Return => stms.push(AST::Return { value: None }),
+        Return => stms.push(Exprent::Exit {
+            value: None,
+            ty: ExitType::Return,
+        }),
         AReturn | DReturn | FReturn | IReturn | LReturn => {
             let value: StackItem = stack.pop()?;
-            stms.push(AST::Return { value: Some(value) })
+            stms.push(Exprent::Exit {
+                value: Some(value),
+                ty: ExitType::Return,
+            })
         }
 
         // Stack duplicating
@@ -1061,7 +1081,7 @@ fn process<'a>(
             let value: StackItem = stack.pop()?;
             let index: StackItem = stack.pop()?;
             let reference: StackItem = stack.pop()?;
-            stms.push(AST::ArrayStore {
+            stms.push(Exprent::ArrayStore {
                 reference,
                 index,
                 value,
@@ -1278,7 +1298,7 @@ fn process<'a>(
         // Switches
         LookupSwitch { default, pairs } => {
             let key: StackItem = stack.pop()?;
-            stms.push(AST::LookupSwitch {
+            stms.push(Exprent::LookupSwitch {
                 key,
                 default: *default,
                 pairs: pairs.clone(),
@@ -1291,7 +1311,7 @@ fn process<'a>(
             offsets,
         } => {
             let index: StackItem = stack.pop()?;
-            stms.push(AST::TableSwitch {
+            stms.push(Exprent::TableSwitch {
                 index,
                 default: *default,
                 low: *low,
@@ -1356,7 +1376,7 @@ fn process<'a>(
         }
 
         // Incrementing
-        IInc { index, value } => stms.push(AST::LocalIncrement {
+        IInc { index, value } => stms.push(Exprent::LocalIncrement {
             index: *index,
             value: *value,
         }),
@@ -1364,14 +1384,14 @@ fn process<'a>(
         // invoke dynamic
         InvokeDynamic(index) => {
             let dynamic = pool.get_invokedynamic(*index).unwrap();
-            stms.push(AST::InvokeDynamic(dynamic))
+            stms.push(Exprent::InvokeDynamic(dynamic))
         }
 
         // Reference compare
         IfACmpEq(index) => {
             let right: StackItem = stack.pop()?;
             let left: StackItem = stack.pop()?;
-            stms.push(AST::Condition {
+            stms.push(Exprent::Condition {
                 right,
                 left,
                 ty: ConditionType::Equal,
@@ -1381,7 +1401,7 @@ fn process<'a>(
         IfACmpNe(index) => {
             let right: StackItem = stack.pop()?;
             let left: StackItem = stack.pop()?;
-            stms.push(AST::Condition {
+            stms.push(Exprent::Condition {
                 right,
                 left,
                 ty: ConditionType::NotEqual,
@@ -1393,7 +1413,7 @@ fn process<'a>(
         IfICmpEq(index) => {
             let right: StackItem = stack.pop()?;
             let left: StackItem = stack.pop()?;
-            stms.push(AST::Condition {
+            stms.push(Exprent::Condition {
                 right,
                 left,
                 ty: ConditionType::Equal,
@@ -1403,7 +1423,7 @@ fn process<'a>(
         IfICmpNe(index) => {
             let right: StackItem = stack.pop()?;
             let left: StackItem = stack.pop()?;
-            stms.push(AST::Condition {
+            stms.push(Exprent::Condition {
                 right,
                 left,
                 ty: ConditionType::NotEqual,
@@ -1413,7 +1433,7 @@ fn process<'a>(
         IfICmpLt(index) => {
             let right: StackItem = stack.pop()?;
             let left: StackItem = stack.pop()?;
-            stms.push(AST::Condition {
+            stms.push(Exprent::Condition {
                 right,
                 left,
                 ty: ConditionType::LessThan,
@@ -1423,7 +1443,7 @@ fn process<'a>(
         IfICmpLe(index) => {
             let right: StackItem = stack.pop()?;
             let left: StackItem = stack.pop()?;
-            stms.push(AST::Condition {
+            stms.push(Exprent::Condition {
                 right,
                 left,
                 ty: ConditionType::LessThanOrEqual,
@@ -1433,7 +1453,7 @@ fn process<'a>(
         IfICmpGt(index) => {
             let right: StackItem = stack.pop()?;
             let left: StackItem = stack.pop()?;
-            stms.push(AST::Condition {
+            stms.push(Exprent::Condition {
                 right,
                 left,
                 ty: ConditionType::GreaterThan,
@@ -1444,7 +1464,7 @@ fn process<'a>(
         IfICmpGe(index) => {
             let right: StackItem = stack.pop()?;
             let left: StackItem = stack.pop()?;
-            stms.push(AST::Condition {
+            stms.push(Exprent::Condition {
                 right,
                 left,
                 ty: ConditionType::GreaterThanOrEqual,
@@ -1467,7 +1487,7 @@ fn process<'a>(
         IfNull(index) => {
             let right: StackItem = stack.pop()?;
             let left: StackItem = StackItem::Value(Value::Null);
-            stms.push(AST::Condition {
+            stms.push(Exprent::Condition {
                 right,
                 left,
                 ty: ConditionType::Equal,
@@ -1477,7 +1497,7 @@ fn process<'a>(
         IfNonNull(index) => {
             let right: StackItem = stack.pop()?;
             let left: StackItem = StackItem::Value(Value::Null);
-            stms.push(AST::Condition {
+            stms.push(Exprent::Condition {
                 right,
                 left,
                 ty: ConditionType::NotEqual,
@@ -1489,7 +1509,7 @@ fn process<'a>(
         IfEq(index) => {
             let right: StackItem = stack.pop()?;
             let left: StackItem = StackItem::Value(Value::Integer(0));
-            stms.push(AST::Condition {
+            stms.push(Exprent::Condition {
                 right,
                 left,
                 ty: ConditionType::Equal,
@@ -1499,7 +1519,7 @@ fn process<'a>(
         IfNe(index) => {
             let right: StackItem = stack.pop()?;
             let left: StackItem = StackItem::Value(Value::Integer(0));
-            stms.push(AST::Condition {
+            stms.push(Exprent::Condition {
                 right,
                 left,
                 ty: ConditionType::NotEqual,
@@ -1509,7 +1529,7 @@ fn process<'a>(
         IfLt(index) => {
             let right: StackItem = stack.pop()?;
             let left: StackItem = StackItem::Value(Value::Integer(0));
-            stms.push(AST::Condition {
+            stms.push(Exprent::Condition {
                 right,
                 left,
                 ty: ConditionType::LessThan,
@@ -1519,7 +1539,7 @@ fn process<'a>(
         IfLe(index) => {
             let right: StackItem = stack.pop()?;
             let left: StackItem = StackItem::Value(Value::Integer(0));
-            stms.push(AST::Condition {
+            stms.push(Exprent::Condition {
                 right,
                 left,
                 ty: ConditionType::LessThanOrEqual,
@@ -1529,7 +1549,7 @@ fn process<'a>(
         IfGe(index) => {
             let right: StackItem = stack.pop()?;
             let left: StackItem = StackItem::Value(Value::Integer(0));
-            stms.push(AST::Condition {
+            stms.push(Exprent::Condition {
                 right,
                 left,
                 ty: ConditionType::GreaterThanOrEqual,
@@ -1539,7 +1559,7 @@ fn process<'a>(
         IfGt(index) => {
             let right: StackItem = stack.pop()?;
             let left: StackItem = StackItem::Value(Value::Integer(0));
-            stms.push(AST::Condition {
+            stms.push(Exprent::Condition {
                 right,
                 left,
                 ty: ConditionType::GreaterThan,

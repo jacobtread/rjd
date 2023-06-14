@@ -1,4 +1,4 @@
-use classfile::attributes::InstructionSet;
+use classfile::attributes::InstructionSeq;
 use petgraph::{
     algo::{dominators, tarjan_scc},
     prelude::DiGraphMap,
@@ -6,7 +6,7 @@ use petgraph::{
 
 use crate::gen::{create_blocks, Block};
 
-pub fn model_control_flow(input: &InstructionSet) -> Vec<Vec<Block<'_>>> {
+pub fn model_control_flow(input: &InstructionSeq) -> Vec<Vec<Block<'_>>> {
     let mut blocks = create_blocks(input);
     let mut graph = DiGraphMap::new();
 

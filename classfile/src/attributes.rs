@@ -124,24 +124,28 @@ fn constant_value(input: &[u8]) -> IResult<&[u8], Attribute> {
 pub struct Code {
     pub max_stack: u16,
     pub max_locals: u16,
-    pub code: InstructionSet,
+    pub code: InstructionSeq,
     pub exception_table: Vec<CodeException>,
     pub attributes: Vec<Attribute>,
 }
 
 type CodeOffset = usize;
 
+/// Collection of instructions and their offset
 #[derive(Debug, Clone)]
-pub struct InstructionSet {
+pub struct InstructionSeq {
+    /// The actual list of instructions and offsets
     pub inner: Vec<(CodeOffset, Instruction)>,
 }
 
+/// Borrowed slice of an instruction set
 #[derive(Debug)]
 pub struct BorrowedInstrSet<'set> {
+    /// Slice of the actual set
     pub inner: &'set [(CodeOffset, Instruction)],
 }
 
-impl InstructionSet {
+impl InstructionSeq {
     pub fn split_jumps(&self) -> Vec<BorrowedInstrSet<'_>> {
         // Collects all the jump instructions (Conditional and Goto)
         let mut jumps = Vec::new();
@@ -235,7 +239,7 @@ impl InstructionSet {
     }
 }
 
-fn code_bytes(input: &[u8]) -> IResult<&[u8], InstructionSet> {
+fn code_bytes(input: &[u8]) -> IResult<&[u8], InstructionSeq> {
     let mut input = input;
     let mut last_length = input.len();
     let mut pos = 0;
@@ -256,7 +260,7 @@ fn code_bytes(input: &[u8]) -> IResult<&[u8], InstructionSet> {
         pos += diff;
     }
 
-    let set = InstructionSet {
+    let set = InstructionSeq {
         inner: instructions,
     };
 

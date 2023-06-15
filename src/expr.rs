@@ -6,8 +6,7 @@ use std::{
 use classfile::{
     attributes::{BorrowedInstrSet, InstructionSeq},
     constant_pool::{
-        ConstantItem, ConstantPool, Fieldref, InvokeDynamic, MethodNameAndType, Methodref,
-        PoolIndex,
+        ConstantItem, ConstantPool, Fieldref, MethodNameAndType, Methodref, PoolIndex,
     },
     inst::{ArrayType, Instruction},
     types::{Class, FieldDesc},
@@ -156,16 +155,9 @@ impl Display for Value<'_> {
     }
 }
 
-#[derive(Debug, Clone)]
-pub enum SelfOperationType<'a> {
-    Negate,
-    Cast(FieldDesc<'a>),
-    ArrayLength,
-}
-
 /// Different operation types
 #[derive(Debug, Clone)]
-pub enum OperationType {
+pub enum OperationType<'a> {
     Muliply,
     Divide,
     Subtract,
@@ -182,27 +174,46 @@ pub enum OperationType {
     Remainder,
     Increment,
     InstanceOf,
+    Negate,
+    Cast(FieldDesc<'a>),
+    ArrayLength,
 }
 
-impl Display for OperationType {
+enum Position {
+    Before,
+    After,
+}
+
+impl<'a> OperationType<'a> {
+    fn position(&self) -> Position {
+        match self {
+            Self::ArrayLength => Position::After,
+            _ => Position::Before,
+        }
+    }
+}
+
+impl Display for OperationType<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            OperationType::Muliply => f.write_char('*'),
-            OperationType::Divide => f.write_char('/'),
-            OperationType::Subtract => f.write_char('-'),
-            OperationType::Add => f.write_char('+'),
-            OperationType::CompareGreater => f.write_char('>'),
-            OperationType::CompareLess => f.write_char('<'),
-            OperationType::SignedCompare => f.write_str("=="),
-            OperationType::Xor => f.write_char('^'),
-            OperationType::BitwiseAnd => f.write_char('&'),
-            OperationType::BitwiseOr => f.write_char('|'),
-            OperationType::BitwiseShl => f.write_str("<<"),
-            OperationType::BitwiseShr => f.write_str(">>"),
-            OperationType::LogicalShr => f.write_str(">>>"),
-            OperationType::Remainder => f.write_char('%'),
-            OperationType::Increment => f.write_str("+="),
-            OperationType::InstanceOf => f.write_str("instanceof"),
+            Self::Muliply => f.write_char('*'),
+            Self::Divide => f.write_char('/'),
+            Self::Subtract | Self::Negate => f.write_char('-'),
+            Self::Add => f.write_char('+'),
+            Self::CompareGreater => f.write_char('>'),
+            Self::CompareLess => f.write_char('<'),
+            Self::SignedCompare => f.write_str("=="),
+            Self::Xor => f.write_char('^'),
+            Self::BitwiseAnd => f.write_char('&'),
+            Self::BitwiseOr => f.write_char('|'),
+            Self::BitwiseShl => f.write_str("<<"),
+            Self::BitwiseShr => f.write_str(">>"),
+            Self::LogicalShr => f.write_str(">>>"),
+            Self::Remainder => f.write_char('%'),
+            Self::Increment => f.write_str("+="),
+            Self::InstanceOf => f.write_str("instanceof"),
+            Self::Cast(cast_to) => write!(f, "({})", cast_to),
+            Self::ArrayLength => f.write_str(".length"),
         }
     }
 }
@@ -511,18 +522,12 @@ pub enum Exprent<'a> {
 
     /// Represents an operation between two stack items
     Operation {
-        /// The right hand side of the operation
-        right: Box<Exprent<'a>>,
-        /// The type of operation
-        ty: OperationType,
         /// The left hand side of the operation
         left: Box<Exprent<'a>>,
-    },
-
-    /// Operation on a single exprent
-    SelfOperation {
-        value: Box<Exprent<'a>>,
-        ty: SelfOperationType<'a>,
+        /// The right hand side of the operation (None if the operation is on the thing itself)
+        right: Option<Box<Exprent<'a>>>,
+        /// The type of operation
+        ty: OperationType<'a>,
     },
 
     /// Represents array access
@@ -604,8 +609,15 @@ impl<'a> Exprent<'a> {
         // check if this is actually right
         match self {
             Self::Value(value) => value.category(),
-            Self::SelfOperation { value, .. } => value.category(),
-            Self::Operation { right, .. } => right.category(),
+            Self::Operation { right, left, ty } => {
+                if let OperationType::Cast(cast_to) = ty {
+                    cast_to.category()
+                } else if let Some(right) = right {
+                    right.category()
+                } else {
+                    left.category()
+                }
+            }
             Self::Local { ty, .. } => ty.category(),
             Self::Field { field, .. } => field.descriptor.category(),
             _ => 1,
@@ -617,7 +629,17 @@ impl Display for Exprent<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Exprent::Value(value) => value.fmt(f),
-            Exprent::Operation { right, ty, left } => write!(f, "{} {} {}", left, ty, right),
+            Exprent::Operation { right, ty, left } => {
+                if let Some(right) = right {
+                    write!(f, "{} {} {}", left, ty, right)
+                } else {
+                    let pos = ty.position();
+                    match pos {
+                        Position::After => write!(f, "{}{}", left, ty),
+                        Position::Before => write!(f, "{}{}", ty, left),
+                    }
+                }
+            }
             Exprent::Local { index, .. } => write!(f, "var{}", index),
             Exprent::Field { field, reference } => {
                 if let Some(reference) = reference {
@@ -627,18 +649,6 @@ impl Display for Exprent<'_> {
                 }
             }
             Exprent::Array { reference, index } => write!(f, "{}[{}]", reference, index),
-
-            Exprent::SelfOperation { value, ty } => match ty {
-                SelfOperationType::Negate => {
-                    write!(f, "-({})", value)
-                }
-                SelfOperationType::Cast(cast_to) => {
-                    write!(f, "({}){}", cast_to, value)
-                }
-                SelfOperationType::ArrayLength => {
-                    write!(f, "{}.length", value)
-                }
-            },
 
             Exprent::New(ty) => {
                 f.write_str("new ")?;
@@ -785,9 +795,10 @@ fn process<'a>(
                 .ok_or(ProcessError::InvalidClassIndex(*index))?;
 
             let value = stack.pop_boxed()?;
-            stack.push(Exprent::SelfOperation {
-                value,
-                ty: SelfOperationType::Cast(FieldDesc::Object(class_name)),
+            stack.push(Exprent::Operation {
+                left: value,
+                right: None,
+                ty: OperationType::Cast(FieldDesc::Object(class_name)),
             });
         }
 
@@ -993,9 +1004,10 @@ fn process<'a>(
         // Array length access
         ArrayLength => {
             let reference: Box<Exprent> = stack.pop_boxed()?;
-            stack.push(Exprent::SelfOperation {
-                value: reference,
-                ty: SelfOperationType::ArrayLength,
+            stack.push(Exprent::Operation {
+                left: reference,
+                right: None,
+                ty: OperationType::ArrayLength,
             })
         }
 
@@ -1043,9 +1055,9 @@ fn process<'a>(
             let right: Box<Exprent> = stack.pop_boxed()?;
             let left: Box<Exprent> = stack.pop_boxed()?;
             stack.push(Exprent::Operation {
-                right,
-                ty: OperationType::Add,
                 left,
+                right: Some(right),
+                ty: OperationType::Add,
             })
         }
 
@@ -1054,9 +1066,9 @@ fn process<'a>(
             let right: Box<Exprent> = stack.pop_boxed()?;
             let left: Box<Exprent> = stack.pop_boxed()?;
             stack.push(Exprent::Operation {
-                right,
-                ty: OperationType::Subtract,
                 left,
+                right: Some(right),
+                ty: OperationType::Subtract,
             })
         }
 
@@ -1065,9 +1077,9 @@ fn process<'a>(
             let right: Box<Exprent> = stack.pop_boxed()?;
             let left: Box<Exprent> = stack.pop_boxed()?;
             stack.push(Exprent::Operation {
-                right,
-                ty: OperationType::Divide,
                 left,
+                right: Some(right),
+                ty: OperationType::Divide,
             })
         }
 
@@ -1076,9 +1088,9 @@ fn process<'a>(
             let right: Box<Exprent> = stack.pop_boxed()?;
             let left: Box<Exprent> = stack.pop_boxed()?;
             stack.push(Exprent::Operation {
-                right,
-                ty: OperationType::Muliply,
                 left,
+                right: Some(right),
+                ty: OperationType::Muliply,
             })
         }
 
@@ -1087,9 +1099,9 @@ fn process<'a>(
             let right: Box<Exprent> = stack.pop_boxed()?;
             let left: Box<Exprent> = stack.pop_boxed()?;
             stack.push(Exprent::Operation {
-                right,
-                ty: OperationType::Remainder,
                 left,
+                right: Some(right),
+                ty: OperationType::Remainder,
             })
         }
 
@@ -1098,9 +1110,9 @@ fn process<'a>(
             let right: Box<Exprent> = stack.pop_boxed()?;
             let left: Box<Exprent> = stack.pop_boxed()?;
             stack.push(Exprent::Operation {
-                right,
-                ty: OperationType::BitwiseAnd,
                 left,
+                right: Some(right),
+                ty: OperationType::BitwiseAnd,
             })
         }
 
@@ -1109,9 +1121,9 @@ fn process<'a>(
             let right: Box<Exprent> = stack.pop_boxed()?;
             let left: Box<Exprent> = stack.pop_boxed()?;
             stack.push(Exprent::Operation {
-                right,
-                ty: OperationType::BitwiseOr,
                 left,
+                right: Some(right),
+                ty: OperationType::BitwiseOr,
             })
         }
 
@@ -1120,9 +1132,9 @@ fn process<'a>(
             let right: Box<Exprent> = stack.pop_boxed()?;
             let left: Box<Exprent> = stack.pop_boxed()?;
             stack.push(Exprent::Operation {
-                right,
-                ty: OperationType::Xor,
                 left,
+                right: Some(right),
+                ty: OperationType::Xor,
             })
         }
 
@@ -1131,9 +1143,9 @@ fn process<'a>(
             let right: Box<Exprent> = stack.pop_boxed()?;
             let left: Box<Exprent> = stack.pop_boxed()?;
             stack.push(Exprent::Operation {
-                right,
-                ty: OperationType::BitwiseShl,
                 left,
+                right: Some(right),
+                ty: OperationType::BitwiseShl,
             })
         }
 
@@ -1142,9 +1154,9 @@ fn process<'a>(
             let right: Box<Exprent> = stack.pop_boxed()?;
             let left: Box<Exprent> = stack.pop_boxed()?;
             stack.push(Exprent::Operation {
-                right,
-                ty: OperationType::BitwiseShr,
                 left,
+                right: Some(right),
+                ty: OperationType::BitwiseShr,
             })
         }
 
@@ -1153,9 +1165,9 @@ fn process<'a>(
             let right: Box<Exprent> = stack.pop_boxed()?;
             let left: Box<Exprent> = stack.pop_boxed()?;
             stack.push(Exprent::Operation {
-                right,
-                ty: OperationType::LogicalShr,
                 left,
+                right: Some(right),
+                ty: OperationType::LogicalShr,
             })
         }
 
@@ -1164,9 +1176,9 @@ fn process<'a>(
             let right: Box<Exprent> = stack.pop_boxed()?;
             let left: Box<Exprent> = stack.pop_boxed()?;
             stack.push(Exprent::Operation {
-                right,
-                ty: OperationType::CompareLess,
                 left,
+                right: Some(right),
+                ty: OperationType::CompareLess,
             })
         }
 
@@ -1175,9 +1187,9 @@ fn process<'a>(
             let right: Box<Exprent> = stack.pop_boxed()?;
             let left: Box<Exprent> = stack.pop_boxed()?;
             stack.push(Exprent::Operation {
-                right,
-                ty: OperationType::CompareGreater,
                 left,
+                right: Some(right),
+                ty: OperationType::CompareGreater,
             })
         }
 
@@ -1185,36 +1197,40 @@ fn process<'a>(
         INeg | LNeg | FNeg | DNeg => {
             let value = stack.pop_boxed()?;
 
-            stack.push(Exprent::SelfOperation {
-                value,
-                ty: SelfOperationType::Negate,
+            stack.push(Exprent::Operation {
+                left: value,
+                right: None,
+                ty: OperationType::Negate,
             });
         }
 
         // Int casting
         L2i | D2i | F2i => {
             let value = stack.pop_boxed()?;
-            stack.push(Exprent::SelfOperation {
-                value,
-                ty: SelfOperationType::Cast(FieldDesc::Int),
+            stack.push(Exprent::Operation {
+                left: value,
+                right: None,
+                ty: OperationType::Cast(FieldDesc::Int),
             });
         }
 
         // Long casting
         I2l | F2l | D2l => {
             let value = stack.pop_boxed()?;
-            stack.push(Exprent::SelfOperation {
-                value,
-                ty: SelfOperationType::Cast(FieldDesc::Long),
+            stack.push(Exprent::Operation {
+                left: value,
+                right: None,
+                ty: OperationType::Cast(FieldDesc::Long),
             });
         }
 
         // Float casting
         D2f | L2f | I2f => {
             let value = stack.pop_boxed()?;
-            stack.push(Exprent::SelfOperation {
-                value,
-                ty: SelfOperationType::Cast(FieldDesc::Float),
+            stack.push(Exprent::Operation {
+                left: value,
+                right: None,
+                ty: OperationType::Cast(FieldDesc::Float),
             });
         }
 
@@ -1222,31 +1238,35 @@ fn process<'a>(
         I2d | L2d | F2d => {
             let value = stack.pop_boxed()?;
 
-            stack.push(Exprent::SelfOperation {
-                value,
-                ty: SelfOperationType::Cast(FieldDesc::Double),
+            stack.push(Exprent::Operation {
+                left: value,
+                right: None,
+                ty: OperationType::Cast(FieldDesc::Double),
             });
         }
 
         I2s => {
             let value = stack.pop_boxed()?;
-            stack.push(Exprent::SelfOperation {
-                value,
-                ty: SelfOperationType::Cast(FieldDesc::Short),
+            stack.push(Exprent::Operation {
+                left: value,
+                right: None,
+                ty: OperationType::Cast(FieldDesc::Short),
             });
         }
         I2c => {
             let value = stack.pop_boxed()?;
-            stack.push(Exprent::SelfOperation {
-                value,
-                ty: SelfOperationType::Cast(FieldDesc::Char),
+            stack.push(Exprent::Operation {
+                left: value,
+                right: None,
+                ty: OperationType::Cast(FieldDesc::Char),
             });
         }
         I2b => {
             let value = stack.pop_boxed()?;
-            stack.push(Exprent::SelfOperation {
-                value,
-                ty: SelfOperationType::Cast(FieldDesc::Byte),
+            stack.push(Exprent::Operation {
+                left: value,
+                right: None,
+                ty: OperationType::Cast(FieldDesc::Byte),
             });
         }
 
@@ -1337,7 +1357,7 @@ fn process<'a>(
 
             stms.push(Exprent::Operation {
                 left,
-                right,
+                right: Some(right),
                 ty: OperationType::InstanceOf,
             })
         }
@@ -1352,7 +1372,7 @@ fn process<'a>(
 
             stms.push(Exprent::Operation {
                 left,
-                right,
+                right: Some(right),
                 ty: OperationType::Increment,
             })
         }
@@ -1447,9 +1467,9 @@ fn process<'a>(
             let right: Box<Exprent> = stack.pop_boxed()?;
             let left: Box<Exprent> = stack.pop_boxed()?;
             stack.push(Exprent::Operation {
-                right,
-                ty: OperationType::SignedCompare,
                 left,
+                right: Some(right),
+                ty: OperationType::SignedCompare,
             })
         }
 

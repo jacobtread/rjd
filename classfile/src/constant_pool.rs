@@ -276,6 +276,19 @@ pub struct Methodref<'a> {
     pub descriptor: MethodDescriptor<'a>,
 }
 
+impl<'a> Methodref<'a> {
+    const INIT_NAME: &str = "<init>";
+    const CLINIT_NAME: &str = "<clinit>";
+
+    fn is_init(&self) -> bool {
+        self.name == Self::INIT_NAME
+    }
+
+    fn is_clinit(&self) -> bool {
+        self.name == Self::CLINIT_NAME
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Fieldref<'a> {
     pub class: Class<'a>,

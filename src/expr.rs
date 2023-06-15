@@ -114,6 +114,8 @@ pub enum Value<'a> {
     Long(i64),
     /// Literal double value
     Double(f64),
+    /// Object class type
+    Object(Class<'a>),
 }
 
 impl Value<'_> {
@@ -146,8 +148,16 @@ impl Display for Value<'_> {
                 f.write_char('L')
             }
             Self::Double(value) => value.fmt(f),
+            Self::Object(value) => value.class.fmt(f),
         }
     }
+}
+
+#[derive(Debug, Clone)]
+pub enum SelfOperationType<'a> {
+    Negate,
+    Cast(FieldDesc<'a>),
+    ArrayLength,
 }
 
 /// Different operation types
@@ -167,6 +177,8 @@ pub enum OperationType {
     BitwiseShr,
     LogicalShr,
     Remainder,
+    Increment,
+    InstanceOf,
 }
 
 impl Display for OperationType {
@@ -186,6 +198,8 @@ impl Display for OperationType {
             OperationType::BitwiseShr => f.write_str(">>"),
             OperationType::LogicalShr => f.write_str(">>>"),
             OperationType::Remainder => f.write_char('%'),
+            OperationType::Increment => f.write_str("+="),
+            OperationType::InstanceOf => f.write_str("instanceof"),
         }
     }
 }
@@ -458,19 +472,6 @@ pub enum InvokeType {
 pub enum Exprent<'a> {
     /// Represents an actual value
     Value(Value<'a>),
-    /// Represents the casting of a literal type
-    LiteralCast {
-        /// The value being cast
-        value: Box<Exprent<'a>>,
-        /// The type that it was cast to
-        cast_to: FieldDesc<'a>,
-    },
-
-    /// Represents a checked cast to a specific object type
-    CheckedCast {
-        value: Box<Exprent<'a>>,
-        cast_to: Class<'a>,
-    },
 
     /// Represents a function invokation
     Invoke {
@@ -484,6 +485,7 @@ pub enum Exprent<'a> {
         /// The type of invocation
         ty: InvokeType,
     },
+
     /// Represents an exit case
     Exit {
         /// Type of exit
@@ -491,6 +493,7 @@ pub enum Exprent<'a> {
         /// Value returned/thrown (None if void required for thrown types)
         value: Option<Box<Exprent<'a>>>,
     },
+
     /// Conditional statement with a jump to another block
     Condition {
         /// Left hand side of the condition
@@ -502,6 +505,7 @@ pub enum Exprent<'a> {
         /// The position to jump to
         jump_index: u16,
     },
+
     /// Represents an operation between two stack items
     Operation {
         /// The right hand side of the operation
@@ -511,128 +515,89 @@ pub enum Exprent<'a> {
         /// The left hand side of the operation
         left: Box<Exprent<'a>>,
     },
-    /// Represents a negated value
-    Negated {
-        /// The value being negated
+
+    /// Operation on a single exprent
+    SelfOperation {
         value: Box<Exprent<'a>>,
+        ty: SelfOperationType<'a>,
     },
 
-    /// Represents the creation of a new object
-    New {
-        /// The object type
-        class: Class<'a>,
-    },
-
-    /// Represents storing something in an array
-    ArrayStore {
+    /// Represents array access
+    Array {
         /// The reference for the array
         reference: Box<Exprent<'a>>,
         /// The stack item representing the index within the array
         index: Box<Exprent<'a>>,
-        /// The value to store at the index
-        value: Box<Exprent<'a>>,
     },
-    /// Represents storing something into a field
-    SetField {
-        /// The field details
-        field: Fieldref<'a>,
-        /// The value to assign the field
-        value: Box<Exprent<'a>>,
-        /// The reference to the object the field is on (None for static fields)
-        reference: Option<Box<Exprent<'a>>>,
+
+    /// Represents an assignment of the left to the right
+    Assignment {
+        /// Left-hand side of the assignment
+        left: Box<Exprent<'a>>,
+        /// Right-hand side of the assignment
+        right: Box<Exprent<'a>>,
     },
-    /// Represents getting a field value from an object
-    GetField {
+
+    /// Represents field access
+    Field {
         /// The reference to the field
         field: Fieldref<'a>,
         /// Reference to the object the field is on(None for static fields)
         reference: Option<Box<Exprent<'a>>>,
     },
-    /// Represents setting a local variable
-    SetLocal {
-        /// The index of the local variable
-        index: u16,
-        /// The value to store in the local variable
-        value: Box<Exprent<'a>>,
-    },
-    /// Represents getting a local variable on the stack
-    GetLocal {
+
+    /// Represents local variable access
+    Local {
         /// The index of the local variable
         index: u16,
         /// The type of the local variable
         ty: LocalVariableType,
     },
-    /// Represents an int increment on a local variable
-    LocalIncrement {
-        /// The index of the local variable
-        index: u16,
-        /// The amount to increment by
-        value: i16,
-    },
+
     InvokeDynamic(InvokeDynamic),
 
-    /// TODO: Should this be handled elsewhere?
-    LookupSwitch {
+    Switch {
         key: Box<Exprent<'a>>,
-        default: i32,
-        pairs: Vec<(i32, i32)>,
-    },
-    /// TODO: Should this be handled elsewhere?
-    TableSwitch {
-        index: Box<Exprent<'a>>,
-        default: i32,
-        low: i32,
-        high: i32,
-        offsets: Vec<i32>,
+        ty: SwitchType,
     },
 
+    /// Represents the creation of a new object
+    New(NewType<'a>),
+
+    Jsr(u16),
+    Ret(u16),
+}
+
+#[derive(Debug, Clone)]
+pub enum NewType<'a> {
+    Object(Class<'a>),
     /// Array of primitive type values 1 dimension
-    NewArray {
+    Array {
         /// The stack item representing the length of the array
         count: Box<Exprent<'a>>,
         /// The type of the array
         ty: ArrayType,
     },
-
-    /// Array of object references
-    ANewArray {
-        /// The stack item representing the length of the array
-        count: Box<Exprent<'a>>,
-        /// The type of the reference
-        class: Class<'a>,
-    },
-
-    /// Multi-dimensional array of object references
-    MultiANewArray {
+    RefArray {
         /// The length of each array dimension
         counts: Vec<Exprent<'a>>,
         /// The type of the reference
         class: Class<'a>,
     },
+}
 
-    /// Represents access of the .length field on an array
-    ArrayLength {
-        /// Reference to the array
-        reference: Box<Exprent<'a>>,
+#[derive(Debug, Clone)]
+pub enum SwitchType {
+    Lookup {
+        default: i32,
+        pairs: Vec<(i32, i32)>,
     },
-    /// Represents loading a value from an array
-    ArrayLoad {
-        /// Reference to the array
-        reference: Box<Exprent<'a>>,
-        /// Index within the array
-        index: Box<Exprent<'a>>,
+    Table {
+        default: i32,
+        low: i32,
+        high: i32,
+        offsets: Vec<i32>,
     },
-
-    /// Represents an instanceof check
-    InstanceOf {
-        /// The value to compare
-        value: Box<Exprent<'a>>,
-        /// The type to compare against
-        class: Class<'a>,
-    },
-
-    Jsr(u16),
-    Ret(u16),
 }
 
 impl<'a> Exprent<'a> {
@@ -640,13 +605,10 @@ impl<'a> Exprent<'a> {
         // check if this is actually right
         match self {
             Self::Value(value) => value.category(),
-            Self::LiteralCast { cast_to, .. } => cast_to.category(),
+            Self::SelfOperation { value, .. } => value.category(),
             Self::Operation { right, .. } => right.category(),
-            Self::GetLocal { ty, .. } => ty.category(),
-            Self::GetField { field, .. } => field.descriptor.category(),
-            Self::ArrayLength { .. } => 1,
-            Self::ArrayLoad { reference, .. } => reference.category(),
-            Self::Negated { value } => value.category(),
+            Self::Local { ty, .. } => ty.category(),
+            Self::Field { field, .. } => field.descriptor.category(),
             _ => 1,
         }
     }
@@ -656,33 +618,46 @@ impl Display for Exprent<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Exprent::Value(value) => value.fmt(f),
-            Exprent::LiteralCast { value, cast_to } => write!(f, "({}){}", cast_to, value),
-            Exprent::CheckedCast { value, cast_to } => write!(f, "({}){}", cast_to.class, value),
             Exprent::Operation { right, ty, left } => write!(f, "{} {} {}", left, ty, right),
-            Exprent::GetLocal { index, .. } => write!(f, "var{}", index),
-            Exprent::GetField { field, reference } => {
+            Exprent::Local { index, .. } => write!(f, "var{}", index),
+            Exprent::Field { field, reference } => {
                 if let Some(reference) = reference {
                     write!(f, "{}.{}", reference, field.name)
                 } else {
                     write!(f, "{}.{}", field.class.class, field.name)
                 }
             }
-            Exprent::ArrayLength { reference } => write!(f, "{}.length", reference),
-            Exprent::ArrayLoad { reference, index } => write!(f, "{}[{}]", reference, index),
-            Exprent::Negated { value } => write!(f, "-({})", value),
-            Exprent::New { class } => write!(f, "new {}()", class.class),
-            Exprent::NewArray { count, ty } => write!(f, "{}[{}]", ty, count),
-            Exprent::ANewArray { count, class } => write!(f, "{}[{}]", class.class, count),
-            Exprent::MultiANewArray { counts, class } => {
-                class.class.fmt(f)?;
-                for count in counts {
-                    write!(f, "[{}]", count)?;
+            Exprent::Array { reference, index } => write!(f, "{}[{}]", reference, index),
+
+            Exprent::SelfOperation { value, ty } => match ty {
+                SelfOperationType::Negate => {
+                    write!(f, "-({})", value)
                 }
-                Ok(())
+                SelfOperationType::Cast(cast_to) => {
+                    write!(f, "({}){}", cast_to, value)
+                }
+                SelfOperationType::ArrayLength => {
+                    write!(f, "{}.length", value)
+                }
+            },
+
+            Exprent::New(ty) => {
+                f.write_str("new ")?;
+                match ty {
+                    NewType::Object(class) => write!(f, "{}()", class.class),
+                    NewType::Array { count, ty } => {
+                        write!(f, "{}[{}]", ty, count)
+                    }
+                    NewType::RefArray { counts, class } => {
+                        class.class.fmt(f)?;
+                        for count in counts {
+                            write!(f, "[{}]", count)?;
+                        }
+                        Ok(())
+                    }
+                }
             }
-            Exprent::InstanceOf { value, class } => {
-                write!(f, "{} instanceof {}", value, class.class)
-            }
+
             Exprent::Jsr(value) => write!(f, "JSR {:#X}", value),
             Exprent::Ret(value) => write!(f, "RET {:#X}", value),
 
@@ -734,37 +709,12 @@ impl Display for Exprent<'_> {
                     left, ty, right, jump_index
                 )
             }
-            Exprent::ArrayStore {
-                reference,
-                index,
-                value,
-            } => {
-                write!(f, "{}[{}] = {};", reference, index, value)
+            Exprent::Assignment { left, right } => {
+                write!(f, "{} = {};", left, right)
             }
-            Exprent::SetField {
-                field,
-                reference,
-                value,
-            } => {
-                if let Some(reference) = reference {
-                    write!(f, "{}.{} = {};", reference, field.name, value)
-                } else {
-                    write!(f, "{}.{} = {};", field.class.class, field.name, value)
-                }
-            }
-            Exprent::SetLocal { index, value } => {
-                // TODO: Checking to see if the local is already defined for
-                // whether to use it + need type checking
-                write!(f, "var{} = {};", index, value)
-            }
-            Exprent::LocalIncrement { index, value } => {
-                // TODO: Checking to see if the local is already defined for
-                // whether to use it + need type checking
-                write!(f, "var{} += {};", index, value)
-            }
+
             Exprent::InvokeDynamic(_) => todo!(),
-            Exprent::LookupSwitch { key, .. } => write!(f, "Lookup Switch: {}", key,),
-            Exprent::TableSwitch { index, .. } => write!(f, "Table Switch: {} ", index),
+            Exprent::Switch { key, ty } => write!(f, " Switch: {} {:?}", key, ty),
         }
     }
 }
@@ -838,13 +788,12 @@ fn process<'a>(
             let class_name: &str = pool
                 .get_class_name(*index)
                 .ok_or(ProcessError::InvalidClassIndex(*index))?;
-            let class: Class =
-                Class::try_parse(class_name).ok_or(ProcessError::InvalidClassName)?;
+
             let value = stack.pop_boxed()?;
-            stack.push(Exprent::CheckedCast {
+            stack.push(Exprent::SelfOperation {
                 value,
-                cast_to: class,
-            })
+                ty: SelfOperationType::Cast(FieldDesc::Object(class_name)),
+            });
         }
 
         // Exception throwing
@@ -894,31 +843,35 @@ fn process<'a>(
         // Local variable storing
         AStore(index) | LStore(index) | IStore(index) | DStore(index) | FStore(index) => {
             let index = *index;
-            let value = stack.pop_boxed()?;
-            stms.push(Exprent::SetLocal { index, value })
+            let right = stack.pop_boxed()?;
+
+            let ty = match instruction {
+                AStore(_) => LocalVariableType::Reference,
+                LStore(_) => LocalVariableType::Long,
+                IStore(_) => LocalVariableType::Int,
+                DStore(_) => LocalVariableType::Double,
+                FStore(_) => LocalVariableType::Float,
+                _ => panic!("Unexpected store type"),
+            };
+
+            let left = Box::new(Exprent::Local { index, ty });
+
+            stms.push(Exprent::Assignment { left, right })
         }
 
         // Local variable loading
-        ILoad(index) => stack.push(Exprent::GetLocal {
-            index: *index,
-            ty: LocalVariableType::Int,
-        }),
-        LLoad(index) => stack.push(Exprent::GetLocal {
-            index: *index,
-            ty: LocalVariableType::Long,
-        }),
-        FLoad(index) => stack.push(Exprent::GetLocal {
-            index: *index,
-            ty: LocalVariableType::Float,
-        }),
-        DLoad(index) => stack.push(Exprent::GetLocal {
-            index: *index,
-            ty: LocalVariableType::Double,
-        }),
-        ALoad(index) => stack.push(Exprent::GetLocal {
-            index: *index,
-            ty: LocalVariableType::Reference,
-        }),
+        ILoad(index) | LLoad(index) | FLoad(index) | DLoad(index) | ALoad(index) => {
+            let ty = match instruction {
+                ALoad(_) => LocalVariableType::Reference,
+                LLoad(_) => LocalVariableType::Long,
+                ILoad(_) => LocalVariableType::Int,
+                DLoad(_) => LocalVariableType::Double,
+                FLoad(_) => LocalVariableType::Float,
+                _ => panic!("Unexpected store type"),
+            };
+
+            stack.push(Exprent::Local { index: *index, ty })
+        }
 
         // Function invokes
         InvokeSpecial(index)
@@ -971,27 +924,27 @@ fn process<'a>(
                 .get_fieldref(*index)
                 .ok_or(ProcessError::InvalidFieldref(*index))?;
 
-            let value: Box<Exprent> = stack.pop_boxed()?;
+            let right: Box<Exprent> = stack.pop_boxed()?;
             let reference: Box<Exprent> = stack.pop_boxed()?;
-
-            stms.push(Exprent::SetField {
+            let left: Box<Exprent> = Box::new(Exprent::Field {
                 field,
                 reference: Some(reference),
-                value,
-            })
+            });
+
+            stms.push(Exprent::Assignment { left, right })
         }
         PutStatic(index) => {
             let field: Fieldref = pool
                 .get_fieldref(*index)
                 .ok_or(ProcessError::InvalidFieldref(*index))?;
 
-            let value: Box<Exprent> = stack.pop_boxed()?;
-
-            stms.push(Exprent::SetField {
+            let right: Box<Exprent> = stack.pop_boxed()?;
+            let left: Box<Exprent> = Box::new(Exprent::Field {
                 field,
-                value,
                 reference: None,
-            })
+            });
+
+            stms.push(Exprent::Assignment { left, right })
         }
 
         // Retreiving from fields
@@ -1000,7 +953,7 @@ fn process<'a>(
                 .get_fieldref(*index)
                 .ok_or(ProcessError::InvalidFieldref(*index))?;
             let reference: Box<Exprent> = stack.pop_boxed()?;
-            stack.push(Exprent::GetField {
+            stack.push(Exprent::Field {
                 field,
                 reference: Some(reference),
             })
@@ -1009,7 +962,7 @@ fn process<'a>(
             let field: Fieldref = pool
                 .get_fieldref(*index)
                 .ok_or(ProcessError::InvalidFieldref(*index))?;
-            stack.push(Exprent::GetField {
+            stack.push(Exprent::Field {
                 field,
                 reference: None,
             })
@@ -1018,7 +971,10 @@ fn process<'a>(
         // Array length access
         ArrayLength => {
             let reference: Box<Exprent> = stack.pop_boxed()?;
-            stack.push(Exprent::ArrayLength { reference })
+            stack.push(Exprent::SelfOperation {
+                value: reference,
+                ty: SelfOperationType::ArrayLength,
+            })
         }
 
         // Returning
@@ -1046,20 +1002,18 @@ fn process<'a>(
         IALoad | LALoad | DALoad | FALoad | SALoad | CALoad | BALoad | AALoad => {
             let index: Box<Exprent> = stack.pop_boxed()?;
             let reference: Box<Exprent> = stack.pop_boxed()?;
-
-            stack.push(Exprent::ArrayLoad { reference, index })
+            stack.push(Exprent::Array { reference, index })
         }
 
         // Array storing
         IAStore | LAStore | DAStore | FAStore | SAStore | CAStore | BAStore | AAStore => {
-            let value: Box<Exprent> = stack.pop_boxed()?;
             let index: Box<Exprent> = stack.pop_boxed()?;
             let reference: Box<Exprent> = stack.pop_boxed()?;
-            stms.push(Exprent::ArrayStore {
-                reference,
-                index,
-                value,
-            })
+
+            let left: Box<Exprent> = Box::new(Exprent::Array { reference, index });
+            let right: Box<Exprent> = stack.pop_boxed()?;
+
+            stms.push(Exprent::Assignment { left, right })
         }
 
         // Adding
@@ -1208,74 +1162,82 @@ fn process<'a>(
         // Negating
         INeg | LNeg | FNeg | DNeg => {
             let value = stack.pop_boxed()?;
-            stack.push(Exprent::Negated { value })
+
+            stack.push(Exprent::SelfOperation {
+                value,
+                ty: SelfOperationType::Negate,
+            });
         }
 
         // Int casting
         L2i | D2i | F2i => {
             let value = stack.pop_boxed()?;
-            stack.push(Exprent::LiteralCast {
+            stack.push(Exprent::SelfOperation {
                 value,
-                cast_to: FieldDesc::Int,
-            })
+                ty: SelfOperationType::Cast(FieldDesc::Int),
+            });
         }
 
         // Long casting
         I2l | F2l | D2l => {
             let value = stack.pop_boxed()?;
-            stack.push(Exprent::LiteralCast {
+            stack.push(Exprent::SelfOperation {
                 value,
-                cast_to: FieldDesc::Long,
-            })
+                ty: SelfOperationType::Cast(FieldDesc::Long),
+            });
         }
 
         // Float casting
         D2f | L2f | I2f => {
             let value = stack.pop_boxed()?;
-            stack.push(Exprent::LiteralCast {
+            stack.push(Exprent::SelfOperation {
                 value,
-                cast_to: FieldDesc::Float,
-            })
+                ty: SelfOperationType::Cast(FieldDesc::Float),
+            });
         }
 
         // Double casting
         I2d | L2d | F2d => {
             let value = stack.pop_boxed()?;
-            stack.push(Exprent::LiteralCast {
+
+            stack.push(Exprent::SelfOperation {
                 value,
-                cast_to: FieldDesc::Double,
-            })
+                ty: SelfOperationType::Cast(FieldDesc::Double),
+            });
         }
 
         I2s => {
             let value = stack.pop_boxed()?;
-            stack.push(Exprent::LiteralCast {
+            stack.push(Exprent::SelfOperation {
                 value,
-                cast_to: FieldDesc::Short,
-            })
+                ty: SelfOperationType::Cast(FieldDesc::Short),
+            });
         }
         I2c => {
             let value = stack.pop_boxed()?;
-            stack.push(Exprent::LiteralCast {
+            stack.push(Exprent::SelfOperation {
                 value,
-                cast_to: FieldDesc::Char,
-            })
+                ty: SelfOperationType::Cast(FieldDesc::Char),
+            });
         }
         I2b => {
             let value = stack.pop_boxed()?;
-            stack.push(Exprent::LiteralCast {
+            stack.push(Exprent::SelfOperation {
                 value,
-                cast_to: FieldDesc::Byte,
-            })
+                ty: SelfOperationType::Cast(FieldDesc::Byte),
+            });
         }
 
         // Switches
         LookupSwitch { default, pairs } => {
             let key: Box<Exprent> = stack.pop_boxed()?;
-            stms.push(Exprent::LookupSwitch {
+
+            stms.push(Exprent::Switch {
                 key,
-                default: *default,
-                pairs: pairs.clone(),
+                ty: SwitchType::Lookup {
+                    default: *default,
+                    pairs: pairs.clone(),
+                },
             })
         }
         TableSwitch {
@@ -1284,13 +1246,15 @@ fn process<'a>(
             high,
             offsets,
         } => {
-            let index: Box<Exprent> = stack.pop_boxed()?;
-            stms.push(Exprent::TableSwitch {
-                index,
-                default: *default,
-                low: *low,
-                high: *high,
-                offsets: offsets.clone(),
+            let key: Box<Exprent> = stack.pop_boxed()?;
+            stms.push(Exprent::Switch {
+                key,
+                ty: SwitchType::Table {
+                    default: *default,
+                    low: *low,
+                    high: *high,
+                    offsets: offsets.clone(),
+                },
             })
         }
 
@@ -1304,14 +1268,13 @@ fn process<'a>(
                 .ok_or(ProcessError::InvalidClassIndex(*index))?;
             let class: Class =
                 Class::try_parse(class_name).ok_or(ProcessError::InvalidClassName)?;
-            stack.push(Exprent::New { class });
+            stack.push(Exprent::New(NewType::Object(class)));
         }
 
         // Array creation
         NewArray(ty) => {
             let count: Box<Exprent> = stack.pop_boxed()?;
-
-            stack.push(Exprent::NewArray { count, ty: *ty });
+            stack.push(Exprent::New(NewType::Array { count, ty: *ty }));
         }
         ANewArray(index) => {
             let class_name: &str = pool
@@ -1319,8 +1282,11 @@ fn process<'a>(
                 .ok_or(ProcessError::InvalidClassIndex(*index))?;
             let class: Class =
                 Class::try_parse(class_name).ok_or(ProcessError::InvalidClassName)?;
-            let count: Box<Exprent> = stack.pop_boxed()?;
-            stack.push(Exprent::ANewArray { count, class });
+            let count: Exprent = stack.pop()?;
+            stack.push(Exprent::New(NewType::RefArray {
+                counts: vec![count],
+                class,
+            }));
         }
         MultiANewArray { dimensions, index } => {
             let class_name: &str = pool
@@ -1333,8 +1299,7 @@ fn process<'a>(
                 counts.push(stack.pop()?);
             }
             counts.reverse();
-
-            stack.push(Exprent::MultiANewArray { counts, class });
+            stack.push(Exprent::New(NewType::RefArray { counts, class }));
         }
 
         // Instance checking
@@ -1344,16 +1309,31 @@ fn process<'a>(
                 .ok_or(ProcessError::InvalidClassIndex(*index))?;
             let class: Class =
                 Class::try_parse(class_name).ok_or(ProcessError::InvalidClassName)?;
-            let value: Box<Exprent> = stack.pop_boxed()?;
 
-            stack.push(Exprent::InstanceOf { value, class })
+            let left: Box<Exprent> = stack.pop_boxed()?;
+            let right = Box::new(Exprent::Value(Value::Object(class)));
+
+            stms.push(Exprent::Operation {
+                left,
+                right,
+                ty: OperationType::InstanceOf,
+            })
         }
 
         // Incrementing
-        IInc { index, value } => stms.push(Exprent::LocalIncrement {
-            index: *index,
-            value: *value,
-        }),
+        IInc { index, value } => {
+            let left = Box::new(Exprent::Local {
+                index: *index,
+                ty: LocalVariableType::Int,
+            });
+            let right = Box::new(Exprent::Value(Value::Integer(*value as i32)));
+
+            stms.push(Exprent::Operation {
+                left,
+                right,
+                ty: OperationType::Increment,
+            })
+        }
 
         // invoke dynamic
         InvokeDynamic(index) => {

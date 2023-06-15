@@ -1,11 +1,11 @@
 use std::fmt::{Display, Write};
 
 use classfile::{
-    attributes::{Attribute, BorrowedInstrSet},
+    attributes::Attribute,
     class::{AccessFlags, ClassFile},
 };
 
-use crate::{expr::Block, graph::model_control_flow};
+use crate::graph::{model_control_flow, Block, BorrowedInstrSeq};
 
 struct JavaClassRenderer<'a> {
     class: ClassFile<'a>,
@@ -171,7 +171,7 @@ impl Display for JavaClassRenderer<'_> {
 
                 if let Some(code) = code {
                     let block = Block {
-                        instructions: BorrowedInstrSet {
+                        instructions: BorrowedInstrSeq {
                             inner: &code.code.inner,
                         },
                         start: 0,

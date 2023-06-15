@@ -1,10 +1,6 @@
-use std::{
-    collections::HashMap,
-    fmt::{Display, Write},
-};
+use std::fmt::{Display, Write};
 
 use classfile::{
-    attributes::{BorrowedInstrSet, InstructionSeq},
     constant_pool::{
         ConstantItem, ConstantPool, Fieldref, MethodNameAndType, Methodref, PoolIndex,
     },
@@ -12,94 +8,6 @@ use classfile::{
     types::{Class, FieldDesc},
 };
 use thiserror::Error;
-
-/// Block of instructions
-#[derive(Debug)]
-pub struct Block<'set> {
-    pub start: usize,
-    pub instructions: BorrowedInstrSet<'set>,
-    pub branches: Vec<usize>,
-}
-
-impl<'set> Block<'set> {
-    pub fn decompile<'a, 'b: 'a>(
-        &'b self,
-        pool: &'b ConstantPool<'a>,
-    ) -> Result<Vec<Exprent<'a>>, ProcessError> {
-        let mut stack: Stack<'a> = Stack::default();
-        let mut ast: Vec<Exprent<'a>> = Vec::new();
-
-        let mut iter = self.instructions.inner.iter();
-
-        for (_pos, instr) in iter.by_ref() {
-            if let Err(err) = process(instr, pool, &mut stack, &mut ast) {
-                eprintln!("ERR: {:?}", err);
-                break;
-            }
-        }
-
-        Ok(ast)
-    }
-}
-
-pub fn create_blocks(input: &InstructionSeq) -> HashMap<usize, Block<'_>> {
-    input
-        .split_jumps()
-        .into_iter()
-        .map(|set| {
-            let first_pos = set.inner[0].0;
-
-            let (last_pos, last_instr) = set.inner.last().unwrap();
-
-            let next = input
-                .inner
-                .iter()
-                .find_map(|(pos, _)| if pos > last_pos { Some(*pos) } else { None });
-
-            use classfile::inst::Instruction::*;
-            let mut branches = Vec::new();
-
-            match last_instr {
-                IfNe(branch) | IfEq(branch) | IfLe(branch) | IfGe(branch) | IfGt(branch)
-                | IfLt(branch) | IfICmpEq(branch) | IfICmpNe(branch) | IfICmpGt(branch)
-                | IfICmpGe(branch) | IfICmpLt(branch) | IfICmpLe(branch) => {
-                    let next_pos = next.unwrap();
-                    branches.push(*branch as usize);
-                    branches.push(next_pos);
-                }
-                Goto(branch) => {
-                    branches.push(*branch as usize);
-                }
-                Return | AReturn | IReturn | LReturn | DReturn | FReturn => {}
-                TableSwitch { offsets, .. } => {
-                    for offset in offsets {
-                        let jump = *offset as usize;
-                        branches.push(jump)
-                    }
-                }
-                LookupSwitch { pairs, .. } => {
-                    for (_, offset) in pairs {
-                        let jump = *offset as usize;
-                        branches.push(jump)
-                    }
-                }
-                _ => {
-                    let next_pos = next.unwrap();
-                    branches.push(next_pos);
-                }
-            }
-
-            (
-                first_pos,
-                Block {
-                    start: first_pos,
-                    instructions: set,
-                    branches,
-                },
-            )
-        })
-        .collect()
-}
 
 /// Represents a literal/constant/reference on the stack
 #[derive(Debug, Clone)]
@@ -301,21 +209,12 @@ impl<'a> Stack<'a> {
         self.inner.pop().ok_or(StackError::Empty)
     }
 
-    fn pop_discard(&mut self) -> StackResult<()> {
-        self.pop()?;
-        Ok(())
-    }
-
     fn pop_boxed(&mut self) -> StackResult<Box<Exprent<'a>>> {
         self.pop().map(Box::new)
     }
 
-    fn clone_last(&mut self) -> StackResult<Exprent<'a>> {
-        self.inner.last().cloned().ok_or(StackError::Empty)
-    }
-
     fn dup(&mut self) -> StackResult<()> {
-        let value = self.clone_last()?;
+        let value = self.inner.last().cloned().ok_or(StackError::Empty)?;
         self.push(value);
         Ok(())
     }
@@ -579,6 +478,7 @@ pub enum Exprent<'a> {
         /// The reference being monitored
         value: Box<Exprent<'a>>,
     },
+    // TODO: Annotations
 }
 
 #[derive(Debug, Clone)]
@@ -794,7 +694,7 @@ pub enum ProcessError {
     InvalidConstantIndex(u16),
 }
 
-fn process<'a>(
+pub fn process_instr<'a>(
     instruction: &Instruction,
     pool: &ConstantPool<'a>,
     stack: &mut Stack<'a>,

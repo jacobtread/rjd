@@ -129,114 +129,13 @@ pub struct Code {
     pub attributes: Vec<Attribute>,
 }
 
-type CodeOffset = usize;
+pub type CodeOffset = usize;
 
 /// Collection of instructions and their offset
 #[derive(Debug, Clone)]
 pub struct InstructionSeq {
     /// The actual list of instructions and offsets
     pub inner: Vec<(CodeOffset, Instruction)>,
-}
-
-/// Borrowed slice of an instruction set
-#[derive(Debug)]
-pub struct BorrowedInstrSet<'set> {
-    /// Slice of the actual set
-    pub inner: &'set [(CodeOffset, Instruction)],
-}
-
-impl InstructionSeq {
-    pub fn split_jumps(&self) -> Vec<BorrowedInstrSet<'_>> {
-        // Collects all the jump instructions (Conditional and Goto)
-        let mut jumps = Vec::new();
-        self.inner
-            .iter()
-            .enumerate()
-            .for_each(|(index, (_pos, instr))| {
-                use crate::inst::Instruction::*;
-
-                // TODO: Error handling instead of unwraps
-                match instr {
-                    IfNe(branch) | IfEq(branch) | IfLe(branch) | IfGe(branch) | IfGt(branch)
-                    | IfLt(branch) | IfICmpEq(branch) | IfICmpNe(branch) | IfICmpGt(branch)
-                    | IfICmpGe(branch) | IfICmpLt(branch) | IfICmpLe(branch) => {
-                        let true_pos = self.index_of_position(*branch as usize).unwrap();
-                        let false_pos = index + 1;
-                        jumps.push(true_pos);
-                        jumps.push(false_pos);
-                    }
-                    Goto(branch) => {
-                        let jump = self.index_of_position(*branch as usize).unwrap();
-                        jumps.push(jump);
-                    }
-                    TableSwitch { offsets, .. } => {
-                        for offset in offsets {
-                            let jump = self.index_of_position(*offset as usize).unwrap();
-                            jumps.push(jump)
-                        }
-                    }
-                    LookupSwitch { pairs, .. } => {
-                        for (_, offset) in pairs {
-                            let jump = self.index_of_position(*offset as usize).unwrap();
-                            jumps.push(jump)
-                        }
-                    }
-                    _ => {}
-                }
-            });
-
-        // Sort and remove duplicates
-        jumps.sort();
-        jumps.dedup();
-
-        let mut out: Vec<BorrowedInstrSet<'_>> = Vec::new();
-
-        if jumps.is_empty() {
-            // No jumps means the entire set is used
-            out.push(BorrowedInstrSet { inner: &self.inner });
-            return out;
-        }
-
-        // Remove jump to first instruction
-        if jumps[0] == 0 {
-            jumps.remove(0);
-        }
-
-        let jumps_len = jumps.len();
-
-        // Remove end jumping to end
-        {
-            let last = jumps[jumps_len - 1];
-            if last == self.inner.len() {
-                jumps.pop();
-            }
-        }
-
-        let mut slice: &[(usize, Instruction)] = &self.inner;
-
-        for i in 0..jumps_len {
-            let index = jumps[i] - if i == 0 { 0 } else { jumps[i - 1] };
-            let (first, second) = slice.split_at(index);
-
-            out.push(BorrowedInstrSet { inner: first });
-
-            if i + 1 == jumps_len {
-                out.push(BorrowedInstrSet { inner: second });
-                break;
-            }
-
-            slice = second;
-        }
-
-        out
-    }
-
-    pub fn index_of_position(&self, position: usize) -> Option<usize> {
-        self.inner
-            .iter()
-            .enumerate()
-            .find_map(|(index, (pos, _))| if *pos == position { Some(index) } else { None })
-    }
 }
 
 fn code_bytes(input: &[u8]) -> IResult<&[u8], InstructionSeq> {

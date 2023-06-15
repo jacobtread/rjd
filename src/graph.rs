@@ -4,7 +4,7 @@ use petgraph::{
     prelude::DiGraphMap,
 };
 
-use crate::gen::{create_blocks, Block};
+use crate::expr::{create_blocks, Block};
 
 pub fn model_control_flow(input: &InstructionSeq) -> Vec<Vec<Block<'_>>> {
     let mut blocks = create_blocks(input);

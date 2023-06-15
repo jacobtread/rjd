@@ -32,13 +32,8 @@ impl<'set> Block<'set> {
         for (_pos, instr) in iter.by_ref() {
             if let Err(err) = process(instr, pool, &mut stack, &mut ast) {
                 eprintln!("ERR: {:?}", err);
-                ast.push(Exprent::Instruction(instr.clone()));
                 break;
             }
-        }
-
-        for (_pos, instr) in iter {
-            ast.push(Exprent::Instruction(instr.clone()))
         }
 
         Ok(ast)
@@ -104,181 +99,6 @@ pub fn create_blocks(input: &InstructionSeq) -> HashMap<usize, Block<'_>> {
         .collect()
 }
 
-/// Represents the different items that can be placed
-/// onto the stack
-#[derive(Debug, Clone)]
-pub enum StackItem<'a> {
-    /// Represents an actual value
-    Value(Value<'a>),
-    /// Represents the casting of a literal type
-    LiteralCast {
-        /// The value being cast
-        value: Box<StackItem<'a>>,
-        /// The type that it was cast to
-        cast_to: FieldDesc<'a>,
-    },
-
-    /// Represents a checked cast to a specific object type
-    CheckedCast {
-        value: Box<StackItem<'a>>,
-        cast_to: Class<'a>,
-    },
-
-    /// Represents an operation between two stack items
-    Operation {
-        /// The right hand side of the operation
-        right: Box<StackItem<'a>>,
-        /// The type of operation
-        ty: OperationType,
-        /// The left hand side of the operation
-        left: Box<StackItem<'a>>,
-    },
-    Call(Call<'a>),
-    /// Represents getting a local variable on the stack
-    GetLocal {
-        /// The index of the local variable
-        index: u16,
-        /// The type of the local variable
-        ty: LocalVariableType,
-    },
-    /// Represents getting a field value from an object
-    GetField {
-        /// The reference to the field
-        field: Fieldref<'a>,
-        /// Reference to the object the field is on
-        reference: Box<StackItem<'a>>,
-    },
-    /// Represents getting a static field value
-    GetFieldStatic {
-        /// The reference to the field
-        field: Fieldref<'a>,
-    },
-    /// Represents access of the .length field on an array
-    ArrayLength {
-        /// Reference to the array
-        reference: Box<StackItem<'a>>,
-    },
-    /// Represents loading a value from an array
-    ArrayLoad {
-        /// Reference to the array
-        reference: Box<StackItem<'a>>,
-        /// Index within the array
-        index: Box<StackItem<'a>>,
-    },
-    /// Represents a negated value
-    Negated {
-        /// The value being negated
-        value: Box<StackItem<'a>>,
-    },
-    /// Represents the creation of a new object
-    New {
-        /// The object type
-        class: Class<'a>,
-    },
-
-    /// Array of primitive type values 1 dimension
-    NewArray {
-        /// The stack item representing the length of the array
-        count: Box<StackItem<'a>>,
-        /// The type of the array
-        ty: ArrayType,
-    },
-
-    /// Array of object references
-    ANewArray {
-        /// The stack item representing the length of the array
-        count: Box<StackItem<'a>>,
-        /// The type of the reference
-        class: Class<'a>,
-    },
-
-    /// Multi-dimensional array of object references
-    MultiANewArray {
-        /// The length of each array dimension
-        counts: Vec<StackItem<'a>>,
-        /// The type of the reference
-        class: Class<'a>,
-    },
-    /// Represents an instanceof check
-    InstanceOf {
-        /// The value to compare
-        value: Box<StackItem<'a>>,
-        /// The type to compare against
-        class: Class<'a>,
-    },
-
-    /// Represents a thrown value
-    Thrown {
-        /// The value that was thrown
-        value: Box<StackItem<'a>>,
-    },
-
-    /// TODO: Expand JSR and Ret before this step
-    Jsr(u16),
-    Ret(u16),
-}
-
-impl Display for StackItem<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            StackItem::Value(value) => value.fmt(f),
-            StackItem::LiteralCast { value, cast_to } => write!(f, "({}){}", cast_to, value),
-            StackItem::CheckedCast { value, cast_to } => write!(f, "({}){}", cast_to.class, value),
-            StackItem::Operation { right, ty, left } => write!(f, "{} {} {}", left, ty, right),
-            StackItem::Call(call) => call.fmt(f),
-            StackItem::GetLocal { index, .. } => write!(f, "var{}", index),
-            StackItem::GetField { field, reference } => write!(f, "{}.{}", reference, field.name),
-            StackItem::GetFieldStatic { field } => {
-                write!(f, "{}.{}", field.class.class, field.name)
-            }
-            StackItem::ArrayLength { reference } => write!(f, "{}.length", reference),
-            StackItem::ArrayLoad { reference, index } => write!(f, "{}[{}]", reference, index),
-            StackItem::Negated { value } => write!(f, "-({})", value),
-            StackItem::New { class } => write!(f, "new {}()", class.class),
-            StackItem::NewArray { count, ty } => write!(f, "{}[{}]", ty, count),
-            StackItem::ANewArray { count, class } => write!(f, "{}[{}]", class.class, count),
-            StackItem::MultiANewArray { counts, class } => {
-                class.class.fmt(f)?;
-                for count in counts {
-                    write!(f, "[{}]", count)?;
-                }
-                Ok(())
-            }
-            StackItem::InstanceOf { value, class } => {
-                write!(f, "{} instanceof {}", value, class.class)
-            }
-            StackItem::Thrown { value } => write!(f, "throw {};", value),
-            StackItem::Jsr(value) => write!(f, "JSR {:#X}", value),
-            StackItem::Ret(value) => write!(f, "RET {:#X}", value),
-        }
-    }
-}
-
-impl<'a> StackItem<'a> {
-    fn category(&self) -> u8 {
-        // check if this is actually right
-        match self {
-            StackItem::Value(value) => value.category(),
-            StackItem::LiteralCast { cast_to, .. } => cast_to.category(),
-            StackItem::Operation { right, .. } => right.category(),
-            StackItem::GetLocal { ty, .. } => ty.category(),
-            StackItem::GetField { field, .. } => field.descriptor.category(),
-            StackItem::GetFieldStatic { field } => field.descriptor.category(),
-            StackItem::ArrayLength { .. } => 1,
-            StackItem::ArrayLoad { reference, .. } => reference.category(),
-            StackItem::Negated { value } => value.category(),
-            _ => 1,
-        }
-    }
-
-    fn statement(self) -> Option<Exprent<'a>> {
-        match self {
-            StackItem::Call(call) => Some(Exprent::Call(call)),
-            _ => None,
-        }
-    }
-}
-
 /// Represents a literal/constant/reference on the stack
 #[derive(Debug, Clone)]
 pub enum Value<'a> {
@@ -297,14 +117,12 @@ pub enum Value<'a> {
 }
 
 impl Value<'_> {
+    /// Obtains category of type as per:
+    /// https://docs.oracle.com/javase/specs/jvms/se7/html/jvms-2.html#jvms-2.11.1-320
     fn category(&self) -> u8 {
         match self {
-            Value::Null => 1,
-            Value::String(_) => 3,
-            Value::Integer(_) => 1,
-            Value::Float(_) => 1,
-            Value::Long(_) => 2,
-            Value::Double(_) => 2,
+            Self::Long(_) | Self::Double(_) => 2,
+            _ => 1,
         }
     }
 }
@@ -312,12 +130,22 @@ impl Value<'_> {
 impl Display for Value<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Value::Null => f.write_str("null"),
-            Value::String(value) => write!(f, "\"{}\"", value),
-            Value::Integer(value) => value.fmt(f),
-            Value::Float(value) => value.fmt(f),
-            Value::Long(value) => value.fmt(f),
-            Value::Double(value) => value.fmt(f),
+            Self::Null => f.write_str("null"),
+            Self::String(value) => {
+                f.write_char('"')?;
+                f.write_str(value)?;
+                f.write_char('"')
+            }
+            Self::Integer(value) => value.fmt(f),
+            Self::Float(value) => {
+                value.fmt(f)?;
+                f.write_char('F')
+            }
+            Self::Long(value) => {
+                value.fmt(f)?;
+                f.write_char('L')
+            }
+            Self::Double(value) => value.fmt(f),
         }
     }
 }
@@ -362,38 +190,6 @@ impl Display for OperationType {
     }
 }
 
-/// Represents a method call
-#[derive(Debug, Clone)]
-pub struct Call<'a> {
-    /// Details about the actual method
-    pub method: Methodref<'a>,
-    /// Stack reference to the method object
-    /// (This is none if the call is static)
-    pub reference: Option<Box<StackItem<'a>>>,
-    /// Stack items for the method arguments
-    pub args: Vec<StackItem<'a>>,
-}
-
-impl Display for Call<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if let Some(reference) = &self.reference {
-            write!(f, "{}.{}(", reference, self.method.name)?;
-        } else {
-            write!(f, "{}.{}", self.method.class.class, self.method.name)?;
-        }
-
-        for i in 0..self.args.len() {
-            self.args[i].fmt(f)?;
-
-            if i + 1 != self.args.len() {
-                f.write_str(", ")?;
-            }
-        }
-
-        f.write_char(')')
-    }
-}
-
 /// Different value types for a local variabel
 #[derive(Debug, Clone)]
 pub enum LocalVariableType {
@@ -402,16 +198,14 @@ pub enum LocalVariableType {
     Float,
     Double,
     Reference,
+    Unknown,
 }
 
 impl LocalVariableType {
     fn category(&self) -> u8 {
         match self {
-            LocalVariableType::Int => 1,
-            LocalVariableType::Long => 2,
-            LocalVariableType::Float => 1,
-            LocalVariableType::Double => 2,
-            LocalVariableType::Reference => 1,
+            Self::Double | Self::Long => 2,
+            _ => 1,
         }
     }
 }
@@ -419,7 +213,7 @@ impl LocalVariableType {
 /// Represents the operand stack
 #[derive(Default)]
 pub struct Stack<'a> {
-    inner: Vec<StackItem<'a>>,
+    inner: Vec<Exprent<'a>>,
 }
 
 /// Represents an error while working on the stack
@@ -444,14 +238,15 @@ pub enum StackError {
 type StackResult<T> = Result<T, StackError>;
 
 impl<'a> Stack<'a> {
-    fn push(&mut self, value: StackItem<'a>) {
+    fn push(&mut self, value: Exprent<'a>) {
         self.inner.push(value);
     }
 
     pub fn pop_use(&mut self, stms: &mut Vec<Exprent<'a>>) -> StackResult<()> {
         let value = self.pop()?;
-        if let Some(stmt) = value.statement() {
-            stms.push(stmt)
+
+        if let Exprent::Invoke { .. } = &value {
+            stms.push(value)
         }
         Ok(())
     }
@@ -471,10 +266,10 @@ impl<'a> Stack<'a> {
     }
 
     fn push_value(&mut self, value: Value<'a>) {
-        self.inner.push(StackItem::Value(value));
+        self.inner.push(Exprent::Value(value));
     }
 
-    fn pop(&mut self) -> StackResult<StackItem<'a>> {
+    fn pop(&mut self) -> StackResult<Exprent<'a>> {
         self.inner.pop().ok_or(StackError::Empty)
     }
 
@@ -483,11 +278,11 @@ impl<'a> Stack<'a> {
         Ok(())
     }
 
-    fn pop_boxed(&mut self) -> StackResult<Box<StackItem<'a>>> {
+    fn pop_boxed(&mut self) -> StackResult<Box<Exprent<'a>>> {
         self.pop().map(Box::new)
     }
 
-    fn clone_last(&mut self) -> StackResult<StackItem<'a>> {
+    fn clone_last(&mut self) -> StackResult<Exprent<'a>> {
         self.inner.last().cloned().ok_or(StackError::Empty)
     }
 
@@ -641,7 +436,7 @@ impl<'a> Stack<'a> {
 }
 
 /// Exit types
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum ExitType {
     /// Method returned
     Return,
@@ -649,57 +444,123 @@ pub enum ExitType {
     Throw,
 }
 
-#[derive(Debug)]
+/// Different types of invocations
+#[derive(Debug, Clone)]
+pub enum InvokeType {
+    Special,
+    Virtual,
+    Static,
+    Interface,
+    Dynamic,
+}
+
+#[derive(Debug, Clone)]
 pub enum Exprent<'a> {
-    Call(Call<'a>),
+    /// Represents an actual value
+    Value(Value<'a>),
+    /// Represents the casting of a literal type
+    LiteralCast {
+        /// The value being cast
+        value: Box<Exprent<'a>>,
+        /// The type that it was cast to
+        cast_to: FieldDesc<'a>,
+    },
+
+    /// Represents a checked cast to a specific object type
+    CheckedCast {
+        value: Box<Exprent<'a>>,
+        cast_to: Class<'a>,
+    },
+
+    /// Represents a function invokation
+    Invoke {
+        /// Method name, class and descriptor
+        method: Methodref<'a>,
+        /// Reference to the object the function is apart of
+        /// (None if the invocation is static)
+        reference: Option<Box<Exprent<'a>>>,
+        /// Arguments provided to the method call
+        args: Vec<Exprent<'a>>,
+        /// The type of invocation
+        ty: InvokeType,
+    },
+    /// Represents an exit case
     Exit {
         /// Type of exit
         ty: ExitType,
         /// Value returned/thrown (None if void required for thrown types)
-        value: Option<StackItem<'a>>,
+        value: Option<Box<Exprent<'a>>>,
     },
     /// Conditional statement with a jump to another block
     Condition {
         /// Left hand side of the condition
-        left: StackItem<'a>,
+        left: Box<Exprent<'a>>,
         /// Right hand side of the condition
-        right: StackItem<'a>,
+        right: Box<Exprent<'a>>,
         /// The actual condition
         ty: ConditionType,
         /// The position to jump to
         jump_index: u16,
     },
+    /// Represents an operation between two stack items
+    Operation {
+        /// The right hand side of the operation
+        right: Box<Exprent<'a>>,
+        /// The type of operation
+        ty: OperationType,
+        /// The left hand side of the operation
+        left: Box<Exprent<'a>>,
+    },
+    /// Represents a negated value
+    Negated {
+        /// The value being negated
+        value: Box<Exprent<'a>>,
+    },
+
+    /// Represents the creation of a new object
+    New {
+        /// The object type
+        class: Class<'a>,
+    },
+
     /// Represents storing something in an array
     ArrayStore {
         /// The reference for the array
-        reference: StackItem<'a>,
+        reference: Box<Exprent<'a>>,
         /// The stack item representing the index within the array
-        index: StackItem<'a>,
+        index: Box<Exprent<'a>>,
         /// The value to store at the index
-        value: StackItem<'a>,
+        value: Box<Exprent<'a>>,
     },
     /// Represents storing something into a field
-    PutField {
+    SetField {
         /// The field details
         field: Fieldref<'a>,
-        /// The reference to the object the field is on
-        reference: StackItem<'a>,
         /// The value to assign the field
-        value: StackItem<'a>,
+        value: Box<Exprent<'a>>,
+        /// The reference to the object the field is on (None for static fields)
+        reference: Option<Box<Exprent<'a>>>,
     },
-    /// Represents storing something into a static field
-    PutFieldStatic {
-        /// The field details
+    /// Represents getting a field value from an object
+    GetField {
+        /// The reference to the field
         field: Fieldref<'a>,
-        /// The value to assign the field
-        value: StackItem<'a>,
+        /// Reference to the object the field is on(None for static fields)
+        reference: Option<Box<Exprent<'a>>>,
     },
     /// Represents setting a local variable
     SetLocal {
         /// The index of the local variable
         index: u16,
         /// The value to store in the local variable
-        value: StackItem<'a>,
+        value: Box<Exprent<'a>>,
+    },
+    /// Represents getting a local variable on the stack
+    GetLocal {
+        /// The index of the local variable
+        index: u16,
+        /// The type of the local variable
+        ty: LocalVariableType,
     },
     /// Represents an int increment on a local variable
     LocalIncrement {
@@ -712,27 +573,140 @@ pub enum Exprent<'a> {
 
     /// TODO: Should this be handled elsewhere?
     LookupSwitch {
-        key: StackItem<'a>,
+        key: Box<Exprent<'a>>,
         default: i32,
         pairs: Vec<(i32, i32)>,
     },
     /// TODO: Should this be handled elsewhere?
     TableSwitch {
-        index: StackItem<'a>,
+        index: Box<Exprent<'a>>,
         default: i32,
         low: i32,
         high: i32,
         offsets: Vec<i32>,
     },
-    /// Plain instruction fallback for errors
-    Instruction(Instruction),
+
+    /// Array of primitive type values 1 dimension
+    NewArray {
+        /// The stack item representing the length of the array
+        count: Box<Exprent<'a>>,
+        /// The type of the array
+        ty: ArrayType,
+    },
+
+    /// Array of object references
+    ANewArray {
+        /// The stack item representing the length of the array
+        count: Box<Exprent<'a>>,
+        /// The type of the reference
+        class: Class<'a>,
+    },
+
+    /// Multi-dimensional array of object references
+    MultiANewArray {
+        /// The length of each array dimension
+        counts: Vec<Exprent<'a>>,
+        /// The type of the reference
+        class: Class<'a>,
+    },
+
+    /// Represents access of the .length field on an array
+    ArrayLength {
+        /// Reference to the array
+        reference: Box<Exprent<'a>>,
+    },
+    /// Represents loading a value from an array
+    ArrayLoad {
+        /// Reference to the array
+        reference: Box<Exprent<'a>>,
+        /// Index within the array
+        index: Box<Exprent<'a>>,
+    },
+
+    /// Represents an instanceof check
+    InstanceOf {
+        /// The value to compare
+        value: Box<Exprent<'a>>,
+        /// The type to compare against
+        class: Class<'a>,
+    },
+
+    Jsr(u16),
+    Ret(u16),
+}
+
+impl<'a> Exprent<'a> {
+    fn category(&self) -> u8 {
+        // check if this is actually right
+        match self {
+            Self::Value(value) => value.category(),
+            Self::LiteralCast { cast_to, .. } => cast_to.category(),
+            Self::Operation { right, .. } => right.category(),
+            Self::GetLocal { ty, .. } => ty.category(),
+            Self::GetField { field, .. } => field.descriptor.category(),
+            Self::ArrayLength { .. } => 1,
+            Self::ArrayLoad { reference, .. } => reference.category(),
+            Self::Negated { value } => value.category(),
+            _ => 1,
+        }
+    }
 }
 
 impl Display for Exprent<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Exprent::Call(call) => {
-                call.fmt(f)?;
+            Exprent::Value(value) => value.fmt(f),
+            Exprent::LiteralCast { value, cast_to } => write!(f, "({}){}", cast_to, value),
+            Exprent::CheckedCast { value, cast_to } => write!(f, "({}){}", cast_to.class, value),
+            Exprent::Operation { right, ty, left } => write!(f, "{} {} {}", left, ty, right),
+            Exprent::GetLocal { index, .. } => write!(f, "var{}", index),
+            Exprent::GetField { field, reference } => {
+                if let Some(reference) = reference {
+                    write!(f, "{}.{}", reference, field.name)
+                } else {
+                    write!(f, "{}.{}", field.class.class, field.name)
+                }
+            }
+            Exprent::ArrayLength { reference } => write!(f, "{}.length", reference),
+            Exprent::ArrayLoad { reference, index } => write!(f, "{}[{}]", reference, index),
+            Exprent::Negated { value } => write!(f, "-({})", value),
+            Exprent::New { class } => write!(f, "new {}()", class.class),
+            Exprent::NewArray { count, ty } => write!(f, "{}[{}]", ty, count),
+            Exprent::ANewArray { count, class } => write!(f, "{}[{}]", class.class, count),
+            Exprent::MultiANewArray { counts, class } => {
+                class.class.fmt(f)?;
+                for count in counts {
+                    write!(f, "[{}]", count)?;
+                }
+                Ok(())
+            }
+            Exprent::InstanceOf { value, class } => {
+                write!(f, "{} instanceof {}", value, class.class)
+            }
+            Exprent::Jsr(value) => write!(f, "JSR {:#X}", value),
+            Exprent::Ret(value) => write!(f, "RET {:#X}", value),
+
+            Exprent::Invoke {
+                method,
+                reference,
+                args,
+                ..
+            } => {
+                if let Some(reference) = reference {
+                    write!(f, "{}.{}(", reference, method.name)?;
+                } else {
+                    write!(f, "{}.{}", method.class.class, method.name)?;
+                }
+
+                for i in 0..args.len() {
+                    args[i].fmt(f)?;
+
+                    if i + 1 != args.len() {
+                        f.write_str(", ")?;
+                    }
+                }
+
+                f.write_char(')')?;
                 f.write_char(';')
             }
             Exprent::Exit { ty, value } => {
@@ -767,15 +741,16 @@ impl Display for Exprent<'_> {
             } => {
                 write!(f, "{}[{}] = {};", reference, index, value)
             }
-            Exprent::PutField {
+            Exprent::SetField {
                 field,
                 reference,
                 value,
             } => {
-                write!(f, "{}.{} = {};", reference, field.name, value)
-            }
-            Exprent::PutFieldStatic { field, value } => {
-                write!(f, "{}.{} = {};", field.class.class, field.name, value)
+                if let Some(reference) = reference {
+                    write!(f, "{}.{} = {};", reference, field.name, value)
+                } else {
+                    write!(f, "{}.{} = {};", field.class.class, field.name, value)
+                }
             }
             Exprent::SetLocal { index, value } => {
                 // TODO: Checking to see if the local is already defined for
@@ -790,13 +765,12 @@ impl Display for Exprent<'_> {
             Exprent::InvokeDynamic(_) => todo!(),
             Exprent::LookupSwitch { key, .. } => write!(f, "Lookup Switch: {}", key,),
             Exprent::TableSwitch { index, .. } => write!(f, "Table Switch: {} ", index),
-            Exprent::Instruction(value) => write!(f, "Failed parse: {:?}", value),
         }
     }
 }
 
 /// The type of condition
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum ConditionType {
     Equal,
     NotEqual,
@@ -867,7 +841,7 @@ fn process<'a>(
             let class: Class =
                 Class::try_parse(class_name).ok_or(ProcessError::InvalidClassName)?;
             let value = stack.pop_boxed()?;
-            stack.push(StackItem::CheckedCast {
+            stack.push(Exprent::CheckedCast {
                 value,
                 cast_to: class,
             })
@@ -875,10 +849,8 @@ fn process<'a>(
 
         // Exception throwing
         AThrow => {
-            let value = stack.pop()?;
-            stack.push(StackItem::Thrown {
-                value: Box::new(value.clone()),
-            });
+            let value = stack.pop_boxed()?;
+
             stms.push(Exprent::Exit {
                 value: Some(value),
                 ty: ExitType::Throw,
@@ -922,34 +894,37 @@ fn process<'a>(
         // Local variable storing
         AStore(index) | LStore(index) | IStore(index) | DStore(index) | FStore(index) => {
             let index = *index;
-            let value = stack.pop()?;
+            let value = stack.pop_boxed()?;
             stms.push(Exprent::SetLocal { index, value })
         }
 
         // Local variable loading
-        ILoad(index) => stack.push(StackItem::GetLocal {
+        ILoad(index) => stack.push(Exprent::GetLocal {
             index: *index,
             ty: LocalVariableType::Int,
         }),
-        LLoad(index) => stack.push(StackItem::GetLocal {
+        LLoad(index) => stack.push(Exprent::GetLocal {
             index: *index,
             ty: LocalVariableType::Long,
         }),
-        FLoad(index) => stack.push(StackItem::GetLocal {
+        FLoad(index) => stack.push(Exprent::GetLocal {
             index: *index,
             ty: LocalVariableType::Float,
         }),
-        DLoad(index) => stack.push(StackItem::GetLocal {
+        DLoad(index) => stack.push(Exprent::GetLocal {
             index: *index,
             ty: LocalVariableType::Double,
         }),
-        ALoad(index) => stack.push(StackItem::GetLocal {
+        ALoad(index) => stack.push(Exprent::GetLocal {
             index: *index,
             ty: LocalVariableType::Reference,
         }),
 
         // Function invokes
-        InvokeSpecial(index) | InvokeVirtual(index) | InvokeInterface(index) => {
+        InvokeSpecial(index)
+        | InvokeVirtual(index)
+        | InvokeInterface(index)
+        | InvokeStatic(index) => {
             let method: Methodref = pool
                 .get_methodref(*index)
                 .ok_or(ProcessError::InvalidMethodref(*index))?;
@@ -961,43 +936,32 @@ fn process<'a>(
             }
             args.reverse();
 
-            let reference = stack.pop_boxed()?;
+            let reference = match instruction {
+                InvokeStatic(_) => None,
+                _ => Some(stack.pop_boxed()?),
+            };
 
-            let call = Call {
+            let ty = match instruction {
+                InvokeStatic(_) => InvokeType::Static,
+                InvokeSpecial(_) => InvokeType::Special,
+                InvokeVirtual(_) => InvokeType::Virtual,
+                InvokeInterface(_) => InvokeType::Interface,
+                _ => panic!("Wasn't expeting to handle any other instructions here"),
+            };
+            let is_void = matches!(&method.descriptor.return_type, FieldDesc::Void);
+
+            let expr = Exprent::Invoke {
                 args,
                 method,
-                reference: Some(reference),
+                reference,
+                ty,
             };
 
             // Non return types should end up on the stack
-            if !matches!(&call.method.descriptor.return_type, FieldDesc::Void) {
-                stack.push(StackItem::Call(call))
+            if !is_void {
+                stack.push(expr)
             } else {
-                stms.push(Exprent::Call(call))
-            }
-        }
-        InvokeStatic(index) => {
-            let method: Methodref = pool
-                .get_methodref(*index)
-                .ok_or(ProcessError::InvalidMethodref(*index))?;
-
-            let args_len = method.descriptor.parameters.len();
-            let mut args = Vec::with_capacity(args_len);
-            for _ in 0..args_len {
-                args.push(stack.pop()?);
-            }
-            args.reverse();
-            let call = Call {
-                args,
-                method,
-                reference: None,
-            };
-
-            // Non return types should end up on the stack
-            if !matches!(&call.method.descriptor.return_type, FieldDesc::Void) {
-                stack.push(StackItem::Call(call))
-            } else {
-                stms.push(Exprent::Call(call))
+                stms.push(expr)
             }
         }
 
@@ -1007,12 +971,12 @@ fn process<'a>(
                 .get_fieldref(*index)
                 .ok_or(ProcessError::InvalidFieldref(*index))?;
 
-            let value: StackItem = stack.pop()?;
-            let reference: StackItem = stack.pop()?;
+            let value: Box<Exprent> = stack.pop_boxed()?;
+            let reference: Box<Exprent> = stack.pop_boxed()?;
 
-            stms.push(Exprent::PutField {
+            stms.push(Exprent::SetField {
                 field,
-                reference,
+                reference: Some(reference),
                 value,
             })
         }
@@ -1021,9 +985,13 @@ fn process<'a>(
                 .get_fieldref(*index)
                 .ok_or(ProcessError::InvalidFieldref(*index))?;
 
-            let value: StackItem = stack.pop()?;
+            let value: Box<Exprent> = stack.pop_boxed()?;
 
-            stms.push(Exprent::PutFieldStatic { field, value })
+            stms.push(Exprent::SetField {
+                field,
+                value,
+                reference: None,
+            })
         }
 
         // Retreiving from fields
@@ -1031,20 +999,26 @@ fn process<'a>(
             let field: Fieldref = pool
                 .get_fieldref(*index)
                 .ok_or(ProcessError::InvalidFieldref(*index))?;
-            let reference: Box<StackItem> = stack.pop_boxed()?;
-            stack.push(StackItem::GetField { field, reference })
+            let reference: Box<Exprent> = stack.pop_boxed()?;
+            stack.push(Exprent::GetField {
+                field,
+                reference: Some(reference),
+            })
         }
         GetStatic(index) => {
             let field: Fieldref = pool
                 .get_fieldref(*index)
                 .ok_or(ProcessError::InvalidFieldref(*index))?;
-            stack.push(StackItem::GetFieldStatic { field })
+            stack.push(Exprent::GetField {
+                field,
+                reference: None,
+            })
         }
 
         // Array length access
         ArrayLength => {
-            let reference: Box<StackItem> = stack.pop_boxed()?;
-            stack.push(StackItem::ArrayLength { reference })
+            let reference: Box<Exprent> = stack.pop_boxed()?;
+            stack.push(Exprent::ArrayLength { reference })
         }
 
         // Returning
@@ -1053,7 +1027,7 @@ fn process<'a>(
             ty: ExitType::Return,
         }),
         AReturn | DReturn | FReturn | IReturn | LReturn => {
-            let value: StackItem = stack.pop()?;
+            let value: Box<Exprent> = stack.pop_boxed()?;
             stms.push(Exprent::Exit {
                 value: Some(value),
                 ty: ExitType::Return,
@@ -1070,17 +1044,17 @@ fn process<'a>(
 
         // Array loading
         IALoad | LALoad | DALoad | FALoad | SALoad | CALoad | BALoad | AALoad => {
-            let index: Box<StackItem> = stack.pop_boxed()?;
-            let reference: Box<StackItem> = stack.pop_boxed()?;
+            let index: Box<Exprent> = stack.pop_boxed()?;
+            let reference: Box<Exprent> = stack.pop_boxed()?;
 
-            stack.push(StackItem::ArrayLoad { reference, index })
+            stack.push(Exprent::ArrayLoad { reference, index })
         }
 
         // Array storing
         IAStore | LAStore | DAStore | FAStore | SAStore | CAStore | BAStore | AAStore => {
-            let value: StackItem = stack.pop()?;
-            let index: StackItem = stack.pop()?;
-            let reference: StackItem = stack.pop()?;
+            let value: Box<Exprent> = stack.pop_boxed()?;
+            let index: Box<Exprent> = stack.pop_boxed()?;
+            let reference: Box<Exprent> = stack.pop_boxed()?;
             stms.push(Exprent::ArrayStore {
                 reference,
                 index,
@@ -1090,9 +1064,9 @@ fn process<'a>(
 
         // Adding
         IAdd | LAdd | FAdd | DAdd => {
-            let right: Box<StackItem> = stack.pop_boxed()?;
-            let left: Box<StackItem> = stack.pop_boxed()?;
-            stack.push(StackItem::Operation {
+            let right: Box<Exprent> = stack.pop_boxed()?;
+            let left: Box<Exprent> = stack.pop_boxed()?;
+            stack.push(Exprent::Operation {
                 right,
                 ty: OperationType::Add,
                 left,
@@ -1101,9 +1075,9 @@ fn process<'a>(
 
         // Subtracting
         ISub | LSub | FSub | DSub => {
-            let right: Box<StackItem> = stack.pop_boxed()?;
-            let left: Box<StackItem> = stack.pop_boxed()?;
-            stack.push(StackItem::Operation {
+            let right: Box<Exprent> = stack.pop_boxed()?;
+            let left: Box<Exprent> = stack.pop_boxed()?;
+            stack.push(Exprent::Operation {
                 right,
                 ty: OperationType::Subtract,
                 left,
@@ -1112,9 +1086,9 @@ fn process<'a>(
 
         // Dividing
         IDiv | LDiv | FDiv | DDiv => {
-            let right: Box<StackItem> = stack.pop_boxed()?;
-            let left: Box<StackItem> = stack.pop_boxed()?;
-            stack.push(StackItem::Operation {
+            let right: Box<Exprent> = stack.pop_boxed()?;
+            let left: Box<Exprent> = stack.pop_boxed()?;
+            stack.push(Exprent::Operation {
                 right,
                 ty: OperationType::Divide,
                 left,
@@ -1123,9 +1097,9 @@ fn process<'a>(
 
         // Multiplying
         IMul | LMul | FMul | DMul => {
-            let right: Box<StackItem> = stack.pop_boxed()?;
-            let left: Box<StackItem> = stack.pop_boxed()?;
-            stack.push(StackItem::Operation {
+            let right: Box<Exprent> = stack.pop_boxed()?;
+            let left: Box<Exprent> = stack.pop_boxed()?;
+            stack.push(Exprent::Operation {
                 right,
                 ty: OperationType::Muliply,
                 left,
@@ -1134,9 +1108,9 @@ fn process<'a>(
 
         // Remainder
         IRem | LRem | FRem | DRem => {
-            let right: Box<StackItem> = stack.pop_boxed()?;
-            let left: Box<StackItem> = stack.pop_boxed()?;
-            stack.push(StackItem::Operation {
+            let right: Box<Exprent> = stack.pop_boxed()?;
+            let left: Box<Exprent> = stack.pop_boxed()?;
+            stack.push(Exprent::Operation {
                 right,
                 ty: OperationType::Remainder,
                 left,
@@ -1145,9 +1119,9 @@ fn process<'a>(
 
         // Bitwise And
         IAnd | LAnd => {
-            let right: Box<StackItem> = stack.pop_boxed()?;
-            let left: Box<StackItem> = stack.pop_boxed()?;
-            stack.push(StackItem::Operation {
+            let right: Box<Exprent> = stack.pop_boxed()?;
+            let left: Box<Exprent> = stack.pop_boxed()?;
+            stack.push(Exprent::Operation {
                 right,
                 ty: OperationType::BitwiseAnd,
                 left,
@@ -1156,9 +1130,9 @@ fn process<'a>(
 
         // | Bitwise OR operation
         LOr | IOr => {
-            let right: Box<StackItem> = stack.pop_boxed()?;
-            let left: Box<StackItem> = stack.pop_boxed()?;
-            stack.push(StackItem::Operation {
+            let right: Box<Exprent> = stack.pop_boxed()?;
+            let left: Box<Exprent> = stack.pop_boxed()?;
+            stack.push(Exprent::Operation {
                 right,
                 ty: OperationType::BitwiseOr,
                 left,
@@ -1167,9 +1141,9 @@ fn process<'a>(
 
         // ^ XOR operation
         LXOr | IXOr => {
-            let right: Box<StackItem> = stack.pop_boxed()?;
-            let left: Box<StackItem> = stack.pop_boxed()?;
-            stack.push(StackItem::Operation {
+            let right: Box<Exprent> = stack.pop_boxed()?;
+            let left: Box<Exprent> = stack.pop_boxed()?;
+            stack.push(Exprent::Operation {
                 right,
                 ty: OperationType::Xor,
                 left,
@@ -1178,9 +1152,9 @@ fn process<'a>(
 
         // << Bitwise shift left operation
         IShL | LShL => {
-            let right: Box<StackItem> = stack.pop_boxed()?;
-            let left: Box<StackItem> = stack.pop_boxed()?;
-            stack.push(StackItem::Operation {
+            let right: Box<Exprent> = stack.pop_boxed()?;
+            let left: Box<Exprent> = stack.pop_boxed()?;
+            stack.push(Exprent::Operation {
                 right,
                 ty: OperationType::BitwiseShl,
                 left,
@@ -1189,9 +1163,9 @@ fn process<'a>(
 
         // >> Bitwise shift right operation
         IShR | LShR => {
-            let right: Box<StackItem> = stack.pop_boxed()?;
-            let left: Box<StackItem> = stack.pop_boxed()?;
-            stack.push(StackItem::Operation {
+            let right: Box<Exprent> = stack.pop_boxed()?;
+            let left: Box<Exprent> = stack.pop_boxed()?;
+            stack.push(Exprent::Operation {
                 right,
                 ty: OperationType::BitwiseShr,
                 left,
@@ -1200,9 +1174,9 @@ fn process<'a>(
 
         // >>> Logical shift right operation
         IUShR | LUShR => {
-            let right: Box<StackItem> = stack.pop_boxed()?;
-            let left: Box<StackItem> = stack.pop_boxed()?;
-            stack.push(StackItem::Operation {
+            let right: Box<Exprent> = stack.pop_boxed()?;
+            let left: Box<Exprent> = stack.pop_boxed()?;
+            stack.push(Exprent::Operation {
                 right,
                 ty: OperationType::LogicalShr,
                 left,
@@ -1211,9 +1185,9 @@ fn process<'a>(
 
         // < Less than comparison (float, double)
         FCmpL | DCmpL => {
-            let right: Box<StackItem> = stack.pop_boxed()?;
-            let left: Box<StackItem> = stack.pop_boxed()?;
-            stack.push(StackItem::Operation {
+            let right: Box<Exprent> = stack.pop_boxed()?;
+            let left: Box<Exprent> = stack.pop_boxed()?;
+            stack.push(Exprent::Operation {
                 right,
                 ty: OperationType::CompareLess,
                 left,
@@ -1222,9 +1196,9 @@ fn process<'a>(
 
         // > Greater than comparison (float, double)
         FCmpG | DCmpG => {
-            let right: Box<StackItem> = stack.pop_boxed()?;
-            let left: Box<StackItem> = stack.pop_boxed()?;
-            stack.push(StackItem::Operation {
+            let right: Box<Exprent> = stack.pop_boxed()?;
+            let left: Box<Exprent> = stack.pop_boxed()?;
+            stack.push(Exprent::Operation {
                 right,
                 ty: OperationType::CompareGreater,
                 left,
@@ -1234,13 +1208,13 @@ fn process<'a>(
         // Negating
         INeg | LNeg | FNeg | DNeg => {
             let value = stack.pop_boxed()?;
-            stack.push(StackItem::Negated { value })
+            stack.push(Exprent::Negated { value })
         }
 
         // Int casting
         L2i | D2i | F2i => {
             let value = stack.pop_boxed()?;
-            stack.push(StackItem::LiteralCast {
+            stack.push(Exprent::LiteralCast {
                 value,
                 cast_to: FieldDesc::Int,
             })
@@ -1249,7 +1223,7 @@ fn process<'a>(
         // Long casting
         I2l | F2l | D2l => {
             let value = stack.pop_boxed()?;
-            stack.push(StackItem::LiteralCast {
+            stack.push(Exprent::LiteralCast {
                 value,
                 cast_to: FieldDesc::Long,
             })
@@ -1258,7 +1232,7 @@ fn process<'a>(
         // Float casting
         D2f | L2f | I2f => {
             let value = stack.pop_boxed()?;
-            stack.push(StackItem::LiteralCast {
+            stack.push(Exprent::LiteralCast {
                 value,
                 cast_to: FieldDesc::Float,
             })
@@ -1267,7 +1241,7 @@ fn process<'a>(
         // Double casting
         I2d | L2d | F2d => {
             let value = stack.pop_boxed()?;
-            stack.push(StackItem::LiteralCast {
+            stack.push(Exprent::LiteralCast {
                 value,
                 cast_to: FieldDesc::Double,
             })
@@ -1275,21 +1249,21 @@ fn process<'a>(
 
         I2s => {
             let value = stack.pop_boxed()?;
-            stack.push(StackItem::LiteralCast {
+            stack.push(Exprent::LiteralCast {
                 value,
                 cast_to: FieldDesc::Short,
             })
         }
         I2c => {
             let value = stack.pop_boxed()?;
-            stack.push(StackItem::LiteralCast {
+            stack.push(Exprent::LiteralCast {
                 value,
                 cast_to: FieldDesc::Char,
             })
         }
         I2b => {
             let value = stack.pop_boxed()?;
-            stack.push(StackItem::LiteralCast {
+            stack.push(Exprent::LiteralCast {
                 value,
                 cast_to: FieldDesc::Byte,
             })
@@ -1297,7 +1271,7 @@ fn process<'a>(
 
         // Switches
         LookupSwitch { default, pairs } => {
-            let key: StackItem = stack.pop()?;
+            let key: Box<Exprent> = stack.pop_boxed()?;
             stms.push(Exprent::LookupSwitch {
                 key,
                 default: *default,
@@ -1310,7 +1284,7 @@ fn process<'a>(
             high,
             offsets,
         } => {
-            let index: StackItem = stack.pop()?;
+            let index: Box<Exprent> = stack.pop_boxed()?;
             stms.push(Exprent::TableSwitch {
                 index,
                 default: *default,
@@ -1330,14 +1304,14 @@ fn process<'a>(
                 .ok_or(ProcessError::InvalidClassIndex(*index))?;
             let class: Class =
                 Class::try_parse(class_name).ok_or(ProcessError::InvalidClassName)?;
-            stack.push(StackItem::New { class });
+            stack.push(Exprent::New { class });
         }
 
         // Array creation
         NewArray(ty) => {
-            let count: Box<StackItem> = stack.pop_boxed()?;
+            let count: Box<Exprent> = stack.pop_boxed()?;
 
-            stack.push(StackItem::NewArray { count, ty: *ty });
+            stack.push(Exprent::NewArray { count, ty: *ty });
         }
         ANewArray(index) => {
             let class_name: &str = pool
@@ -1345,8 +1319,8 @@ fn process<'a>(
                 .ok_or(ProcessError::InvalidClassIndex(*index))?;
             let class: Class =
                 Class::try_parse(class_name).ok_or(ProcessError::InvalidClassName)?;
-            let count: Box<StackItem> = stack.pop_boxed()?;
-            stack.push(StackItem::ANewArray { count, class });
+            let count: Box<Exprent> = stack.pop_boxed()?;
+            stack.push(Exprent::ANewArray { count, class });
         }
         MultiANewArray { dimensions, index } => {
             let class_name: &str = pool
@@ -1354,13 +1328,13 @@ fn process<'a>(
                 .ok_or(ProcessError::InvalidClassIndex(*index))?;
             let class: Class =
                 Class::try_parse(class_name).ok_or(ProcessError::InvalidClassName)?;
-            let mut counts: Vec<StackItem> = Vec::with_capacity(*dimensions as usize);
+            let mut counts: Vec<Exprent> = Vec::with_capacity(*dimensions as usize);
             for _ in 0..*dimensions {
                 counts.push(stack.pop()?);
             }
             counts.reverse();
 
-            stack.push(StackItem::MultiANewArray { counts, class });
+            stack.push(Exprent::MultiANewArray { counts, class });
         }
 
         // Instance checking
@@ -1370,9 +1344,9 @@ fn process<'a>(
                 .ok_or(ProcessError::InvalidClassIndex(*index))?;
             let class: Class =
                 Class::try_parse(class_name).ok_or(ProcessError::InvalidClassName)?;
-            let value: Box<StackItem> = stack.pop_boxed()?;
+            let value: Box<Exprent> = stack.pop_boxed()?;
 
-            stack.push(StackItem::InstanceOf { value, class })
+            stack.push(Exprent::InstanceOf { value, class })
         }
 
         // Incrementing
@@ -1389,8 +1363,8 @@ fn process<'a>(
 
         // Reference compare
         IfACmpEq(index) => {
-            let right: StackItem = stack.pop()?;
-            let left: StackItem = stack.pop()?;
+            let right: Box<Exprent> = stack.pop_boxed()?;
+            let left: Box<Exprent> = stack.pop_boxed()?;
             stms.push(Exprent::Condition {
                 right,
                 left,
@@ -1399,8 +1373,8 @@ fn process<'a>(
             })
         }
         IfACmpNe(index) => {
-            let right: StackItem = stack.pop()?;
-            let left: StackItem = stack.pop()?;
+            let right: Box<Exprent> = stack.pop_boxed()?;
+            let left: Box<Exprent> = stack.pop_boxed()?;
             stms.push(Exprent::Condition {
                 right,
                 left,
@@ -1411,8 +1385,8 @@ fn process<'a>(
 
         // Int compare
         IfICmpEq(index) => {
-            let right: StackItem = stack.pop()?;
-            let left: StackItem = stack.pop()?;
+            let right: Box<Exprent> = stack.pop_boxed()?;
+            let left: Box<Exprent> = stack.pop_boxed()?;
             stms.push(Exprent::Condition {
                 right,
                 left,
@@ -1421,8 +1395,8 @@ fn process<'a>(
             })
         }
         IfICmpNe(index) => {
-            let right: StackItem = stack.pop()?;
-            let left: StackItem = stack.pop()?;
+            let right: Box<Exprent> = stack.pop_boxed()?;
+            let left: Box<Exprent> = stack.pop_boxed()?;
             stms.push(Exprent::Condition {
                 right,
                 left,
@@ -1431,8 +1405,8 @@ fn process<'a>(
             })
         }
         IfICmpLt(index) => {
-            let right: StackItem = stack.pop()?;
-            let left: StackItem = stack.pop()?;
+            let right: Box<Exprent> = stack.pop_boxed()?;
+            let left: Box<Exprent> = stack.pop_boxed()?;
             stms.push(Exprent::Condition {
                 right,
                 left,
@@ -1441,8 +1415,8 @@ fn process<'a>(
             })
         }
         IfICmpLe(index) => {
-            let right: StackItem = stack.pop()?;
-            let left: StackItem = stack.pop()?;
+            let right: Box<Exprent> = stack.pop_boxed()?;
+            let left: Box<Exprent> = stack.pop_boxed()?;
             stms.push(Exprent::Condition {
                 right,
                 left,
@@ -1451,8 +1425,8 @@ fn process<'a>(
             })
         }
         IfICmpGt(index) => {
-            let right: StackItem = stack.pop()?;
-            let left: StackItem = stack.pop()?;
+            let right: Box<Exprent> = stack.pop_boxed()?;
+            let left: Box<Exprent> = stack.pop_boxed()?;
             stms.push(Exprent::Condition {
                 right,
                 left,
@@ -1462,8 +1436,8 @@ fn process<'a>(
         }
 
         IfICmpGe(index) => {
-            let right: StackItem = stack.pop()?;
-            let left: StackItem = stack.pop()?;
+            let right: Box<Exprent> = stack.pop_boxed()?;
+            let left: Box<Exprent> = stack.pop_boxed()?;
             stms.push(Exprent::Condition {
                 right,
                 left,
@@ -1474,9 +1448,9 @@ fn process<'a>(
 
         // Long compare
         LCmp => {
-            let right = stack.pop_boxed()?;
-            let left = stack.pop_boxed()?;
-            stack.push(StackItem::Operation {
+            let right: Box<Exprent> = stack.pop_boxed()?;
+            let left: Box<Exprent> = stack.pop_boxed()?;
+            stack.push(Exprent::Operation {
                 right,
                 ty: OperationType::SignedCompare,
                 left,
@@ -1485,8 +1459,8 @@ fn process<'a>(
 
         // Null compare
         IfNull(index) => {
-            let right: StackItem = stack.pop()?;
-            let left: StackItem = StackItem::Value(Value::Null);
+            let right: Box<Exprent> = stack.pop_boxed()?;
+            let left: Box<Exprent> = Box::new(Exprent::Value(Value::Null));
             stms.push(Exprent::Condition {
                 right,
                 left,
@@ -1495,8 +1469,8 @@ fn process<'a>(
             })
         }
         IfNonNull(index) => {
-            let right: StackItem = stack.pop()?;
-            let left: StackItem = StackItem::Value(Value::Null);
+            let right: Box<Exprent> = stack.pop_boxed()?;
+            let left: Box<Exprent> = Box::new(Exprent::Value(Value::Null));
             stms.push(Exprent::Condition {
                 right,
                 left,
@@ -1507,8 +1481,8 @@ fn process<'a>(
 
         // Int zero compare
         IfEq(index) => {
-            let right: StackItem = stack.pop()?;
-            let left: StackItem = StackItem::Value(Value::Integer(0));
+            let right: Box<Exprent> = stack.pop_boxed()?;
+            let left: Box<Exprent> = Box::new(Exprent::Value(Value::Integer(0)));
             stms.push(Exprent::Condition {
                 right,
                 left,
@@ -1517,8 +1491,8 @@ fn process<'a>(
             })
         }
         IfNe(index) => {
-            let right: StackItem = stack.pop()?;
-            let left: StackItem = StackItem::Value(Value::Integer(0));
+            let right: Box<Exprent> = stack.pop_boxed()?;
+            let left: Box<Exprent> = Box::new(Exprent::Value(Value::Integer(0)));
             stms.push(Exprent::Condition {
                 right,
                 left,
@@ -1527,8 +1501,8 @@ fn process<'a>(
             })
         }
         IfLt(index) => {
-            let right: StackItem = stack.pop()?;
-            let left: StackItem = StackItem::Value(Value::Integer(0));
+            let right: Box<Exprent> = stack.pop_boxed()?;
+            let left: Box<Exprent> = Box::new(Exprent::Value(Value::Integer(0)));
             stms.push(Exprent::Condition {
                 right,
                 left,
@@ -1537,8 +1511,8 @@ fn process<'a>(
             })
         }
         IfLe(index) => {
-            let right: StackItem = stack.pop()?;
-            let left: StackItem = StackItem::Value(Value::Integer(0));
+            let right: Box<Exprent> = stack.pop_boxed()?;
+            let left: Box<Exprent> = Box::new(Exprent::Value(Value::Integer(0)));
             stms.push(Exprent::Condition {
                 right,
                 left,
@@ -1547,8 +1521,8 @@ fn process<'a>(
             })
         }
         IfGe(index) => {
-            let right: StackItem = stack.pop()?;
-            let left: StackItem = StackItem::Value(Value::Integer(0));
+            let right: Box<Exprent> = stack.pop_boxed()?;
+            let left: Box<Exprent> = Box::new(Exprent::Value(Value::Integer(0)));
             stms.push(Exprent::Condition {
                 right,
                 left,
@@ -1557,8 +1531,8 @@ fn process<'a>(
             })
         }
         IfGt(index) => {
-            let right: StackItem = stack.pop()?;
-            let left: StackItem = StackItem::Value(Value::Integer(0));
+            let right: Box<Exprent> = stack.pop_boxed()?;
+            let left: Box<Exprent> = Box::new(Exprent::Value(Value::Integer(0)));
             stms.push(Exprent::Condition {
                 right,
                 left,
@@ -1567,8 +1541,8 @@ fn process<'a>(
             })
         }
 
-        JSr(index) => stack.push(StackItem::Jsr(*index)),
-        Ret(index) => stack.push(StackItem::Ret(*index)),
+        JSr(index) => stack.push(Exprent::Jsr(*index)),
+        Ret(index) => stack.push(Exprent::Ret(*index)),
 
         Goto(_) | Nop => {}
     }

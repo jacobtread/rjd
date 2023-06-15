@@ -6,7 +6,7 @@ use classfile::{
 };
 
 use crate::{
-    gen::{create_blocks, Block},
+    expr::{create_blocks, Block},
     graph::model_control_flow,
 };
 

@@ -709,7 +709,6 @@ impl Display for Exprent<'_> {
                 write!(f, "{} = {};", left, right)
             }
 
-            Exprent::InvokeDynamic(_) => todo!(),
             Exprent::Switch { key, ty } => write!(f, " Switch: {} {:?}", key, ty),
         }
     }
@@ -873,6 +872,7 @@ fn process<'a>(
         InvokeSpecial(index)
         | InvokeVirtual(index)
         | InvokeInterface(index)
+        | InvokeDynamic(index)
         | InvokeStatic(index) => {
             let ty = match instruction {
                 InvokeStatic(_) => InvokeType::Static,

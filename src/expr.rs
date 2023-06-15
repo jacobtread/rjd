@@ -563,9 +563,6 @@ pub enum Exprent<'a> {
 
     /// Represents the creation of a new object
     New(NewType<'a>),
-
-    Jsr(u16),
-    Ret(u16),
 }
 
 #[derive(Debug, Clone)]
@@ -657,9 +654,6 @@ impl Display for Exprent<'_> {
                     }
                 }
             }
-
-            Exprent::Jsr(value) => write!(f, "JSR {:#X}", value),
-            Exprent::Ret(value) => write!(f, "RET {:#X}", value),
 
             Exprent::Invoke {
                 method,
@@ -1521,9 +1515,7 @@ fn process<'a>(
             })
         }
 
-        JSr(index) => stack.push(Exprent::Jsr(*index)),
-        Ret(index) => stack.push(Exprent::Ret(*index)),
-
+        JSr(_) | Ret(_) => {}
         Goto(_) | Nop => {}
     }
 

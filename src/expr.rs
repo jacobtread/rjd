@@ -416,7 +416,7 @@ pub enum Exprent<'a> {
         /// The actual condition
         ty: ConditionType,
         /// The position to jump to
-        jump_index: u16,
+        jump_index: i32,
     },
 
     /// Represents an operation between two stack items

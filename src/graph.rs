@@ -1,14 +1,20 @@
-use std::collections::HashMap;
+use std::{
+    collections::{HashMap, HashSet},
+    vec,
+};
 
 use classfile::{
-    attributes::{CodeOffset, InstructionSeq},
+    attributes::{CodeException, CodeOffset, InstructionSeq},
     constant_pool::ConstantPool,
     inst::Instruction,
 };
 use petgraph::{
     algo::{dominators, tarjan_scc},
     prelude::DiGraphMap,
+    visit::IntoEdgesDirected,
+    Direction,
 };
+use thiserror::Error;
 
 use crate::expr::{process_instr, Exprent, ProcessError, Stack};
 
@@ -19,44 +25,70 @@ pub struct BorrowedInstrSeq<'set> {
     pub inner: &'set [(CodeOffset, Instruction)],
 }
 
-pub fn split_jumps(seq: &InstructionSeq) -> Vec<BorrowedInstrSeq<'_>> {
+#[derive(Debug, Error)]
+pub enum FlowError {
+    #[error("Branch jump target not found")]
+    Bounds,
+}
+
+/// Obtains the index of a branch position within the
+/// provided instruction seq
+fn branch_index(seq: &InstructionSeq, branch: usize) -> Option<usize> {
+    seq.inner.iter().position(|(pos1, _)| *pos1 == branch)
+}
+
+pub fn split_jumps<'seq>(
+    seq: &'seq InstructionSeq,
+    ex: &[CodeException],
+) -> Result<Vec<BorrowedInstrSeq<'seq>>, FlowError> {
     // Collects all the jump instructions (Conditional and Goto)
     let mut jumps = Vec::new();
-    seq.inner
-        .iter()
-        .enumerate()
-        .for_each(|(index, (_pos, instr))| {
-            use Instruction::*;
 
-            // TODO: Error handling instead of unwraps
-            match instr {
-                IfNe(branch) | IfEq(branch) | IfLe(branch) | IfGe(branch) | IfGt(branch)
-                | IfLt(branch) | IfICmpEq(branch) | IfICmpNe(branch) | IfICmpGt(branch)
-                | IfICmpGe(branch) | IfICmpLt(branch) | IfICmpLe(branch) => {
-                    let true_pos = index_of_position(seq, *branch as usize).unwrap();
-                    let false_pos = index + 1;
-                    jumps.push(true_pos);
-                    jumps.push(false_pos);
-                }
-                Goto(branch) => {
-                    let jump = index_of_position(seq, *branch as usize).unwrap();
-                    jumps.push(jump);
-                }
-                TableSwitch { offsets, .. } => {
-                    for offset in offsets {
-                        let jump = index_of_position(seq, *offset as usize).unwrap();
-                        jumps.push(jump)
-                    }
-                }
-                LookupSwitch { pairs, .. } => {
-                    for (_, offset) in pairs {
-                        let jump = index_of_position(seq, *offset as usize).unwrap();
-                        jumps.push(jump)
-                    }
-                }
-                _ => {}
+    // Add exception points
+    for ex in ex {
+        jumps.push(ex.start_pc as usize);
+        jumps.push(ex.end_pc as usize);
+        jumps.push(ex.handler_pc as usize);
+    }
+
+    for (index, (_, instruction)) in seq.inner.iter().enumerate() {
+        use Instruction::*;
+        // TODO: Error handling instead of unwraps
+        match instruction {
+            // If statement branches
+            IfNe(branch) | IfEq(branch) | IfLe(branch) | IfGe(branch) | IfGt(branch)
+            | IfLt(branch) | IfICmpEq(branch) | IfICmpNe(branch) | IfICmpGt(branch)
+            | IfICmpGe(branch) | IfICmpLt(branch) | IfICmpLe(branch) => {
+                let true_pos: usize =
+                    branch_index(seq, *branch as usize).ok_or(FlowError::Bounds)?;
+                let false_pos = index + 1;
+                jumps.push(true_pos);
+                jumps.push(false_pos);
             }
-        });
+            // Goto jumps
+            Goto(branch) => {
+                let jump_pos = branch_index(seq, *branch as usize).ok_or(FlowError::Bounds)?;
+                jumps.push(jump_pos);
+            }
+            // Table switches
+            TableSwitch { offsets, .. } => {
+                for offset in offsets {
+                    let jump_pos = branch_index(seq, *offset as usize).ok_or(FlowError::Bounds)?;
+
+                    jumps.push(jump_pos)
+                }
+            }
+            // Lookup switches
+            LookupSwitch { pairs, .. } => {
+                for (_, offset) in pairs {
+                    let jump_pos = branch_index(seq, *offset as usize).ok_or(FlowError::Bounds)?;
+
+                    jumps.push(jump_pos)
+                }
+            }
+            _ => {}
+        }
+    }
 
     // Sort and remove duplicates
     jumps.sort();
@@ -67,7 +99,7 @@ pub fn split_jumps(seq: &InstructionSeq) -> Vec<BorrowedInstrSeq<'_>> {
     if jumps.is_empty() {
         // No jumps means the entire set is used
         out.push(BorrowedInstrSeq { inner: &seq.inner });
-        return out;
+        return Ok(out);
     }
 
     // Remove jump to first instruction
@@ -101,14 +133,7 @@ pub fn split_jumps(seq: &InstructionSeq) -> Vec<BorrowedInstrSeq<'_>> {
         slice = second;
     }
 
-    out
-}
-
-pub fn index_of_position(set: &InstructionSeq, position: usize) -> Option<usize> {
-    set.inner
-        .iter()
-        .enumerate()
-        .find_map(|(index, (pos, _))| if *pos == position { Some(index) } else { None })
+    Ok(out)
 }
 
 /// Block of instructions
@@ -138,68 +163,82 @@ impl<'set> Block<'set> {
 
         Ok(ast)
     }
+
+    pub fn collect_branches(&mut self, input: &InstructionSeq) {
+        let (last_pos, last_instr) = self
+            .instructions
+            .inner
+            .last()
+            .expect("Instruction set was empty");
+        let next = input
+            .inner
+            .iter()
+            .map(|(pos, _)| *pos)
+            .find(|pos| pos > last_pos);
+
+        use Instruction::*;
+        match last_instr {
+            IfNe(branch) | IfEq(branch) | IfLe(branch) | IfGe(branch) | IfGt(branch)
+            | IfLt(branch) | IfICmpEq(branch) | IfICmpNe(branch) | IfICmpGt(branch)
+            | IfICmpGe(branch) | IfICmpLt(branch) | IfICmpLe(branch) => {
+                let next_pos = next.unwrap();
+                self.branches.push(*branch as usize);
+                self.branches.push(next_pos);
+            }
+            Goto(branch) => {
+                self.branches.push(*branch as usize);
+            }
+            Return | AReturn | IReturn | LReturn | DReturn | FReturn => {}
+            TableSwitch { offsets, .. } => {
+                for offset in offsets {
+                    let jump = *offset as usize;
+                    self.branches.push(jump)
+                }
+                let next_pos = next.unwrap();
+                self.branches.push(next_pos);
+            }
+            LookupSwitch { pairs, .. } => {
+                for (_, offset) in pairs {
+                    let jump = *offset as usize;
+                    self.branches.push(jump)
+                }
+                let next_pos = next.unwrap();
+                self.branches.push(next_pos);
+            }
+            _ => {
+                let next_pos = next.unwrap();
+                self.branches.push(next_pos);
+            }
+        }
+    }
 }
 
-pub fn create_blocks(input: &InstructionSeq) -> HashMap<usize, Block<'_>> {
-    split_jumps(input)
+pub fn create_blocks<'seq>(
+    input: &'seq InstructionSeq,
+    ex: &[CodeException],
+) -> Result<HashMap<usize, Block<'seq>>, FlowError> {
+    Ok(split_jumps(input, ex)?
         .into_iter()
         .map(|set| {
             let first_pos = set.inner[0].0;
-
-            let (last_pos, last_instr) = set.inner.last().unwrap();
-
-            let next = input
-                .inner
-                .iter()
-                .find_map(|(pos, _)| if pos > last_pos { Some(*pos) } else { None });
-
-            use classfile::inst::Instruction::*;
-            let mut branches = Vec::new();
-
-            match last_instr {
-                IfNe(branch) | IfEq(branch) | IfLe(branch) | IfGe(branch) | IfGt(branch)
-                | IfLt(branch) | IfICmpEq(branch) | IfICmpNe(branch) | IfICmpGt(branch)
-                | IfICmpGe(branch) | IfICmpLt(branch) | IfICmpLe(branch) => {
-                    let next_pos = next.unwrap();
-                    branches.push(*branch as usize);
-                    branches.push(next_pos);
-                }
-                Goto(branch) => {
-                    branches.push(*branch as usize);
-                }
-                Return | AReturn | IReturn | LReturn | DReturn | FReturn => {}
-                TableSwitch { offsets, .. } => {
-                    for offset in offsets {
-                        let jump = *offset as usize;
-                        branches.push(jump)
-                    }
-                }
-                LookupSwitch { pairs, .. } => {
-                    for (_, offset) in pairs {
-                        let jump = *offset as usize;
-                        branches.push(jump)
-                    }
-                }
-                _ => {
-                    let next_pos = next.unwrap();
-                    branches.push(next_pos);
-                }
-            }
 
             (
                 first_pos,
                 Block {
                     start: first_pos,
                     instructions: set,
-                    branches,
+                    branches: Vec::new(),
                 },
             )
         })
-        .collect()
+        .collect())
 }
 
-pub fn model_control_flow(input: &InstructionSeq) -> Vec<Vec<Block<'_>>> {
-    let mut blocks = create_blocks(input);
+pub fn model_control_flow<'seq>(
+    input: &'seq InstructionSeq,
+    ex: &[CodeException],
+) -> Result<Vec<Vec<Block<'seq>>>, FlowError> {
+    let mut blocks = create_blocks(input, ex)?;
     let mut graph = DiGraphMap::new();
 
     // Create initial graph points
@@ -210,18 +249,39 @@ pub fn model_control_flow(input: &InstructionSeq) -> Vec<Vec<Block<'_>>> {
     blocks.iter().for_each(|(pos, block)| {
         // Add edges
         block.branches.iter().for_each(|branch| {
-            graph.add_edge(*pos, *branch, 0);
+            graph.add_edge(*pos, *branch, 1);
+            // branch = successor
         });
     });
 
+    let first = blocks.get(&0).expect("Missing first block");
+    let last = Block {
+        start: input.inner.len(),
+        instructions: BorrowedInstrSeq { inner: &[] },
+        branches: vec![],
+    };
+
+    graph.add_node(last.start);
+
+    blocks.iter().for_each(|(pos, _)| {
+        // If the block has no sucessors
+        if graph
+            .edges_directed(*pos, Direction::Outgoing)
+            .next()
+            .is_none()
+        {
+            // Make it the block before last
+            graph.add_edge(last.start, *pos, 0);
+            // graph.add_edge(*pos, last.start, 0);
+        }
+    });
+
+    blocks.insert(last.start, last);
+
     let a = dominators::simple_fast(&graph, 0);
     let mut targ = tarjan_scc(&graph);
-
     targ.sort();
-
     println!("doms: {:?}", a);
-
-    let root = a.root();
 
     let mut out1 = Vec::with_capacity(targ.len());
     for mut i in targ {
@@ -234,5 +294,5 @@ pub fn model_control_flow(input: &InstructionSeq) -> Vec<Vec<Block<'_>>> {
         out1.push(out2);
     }
 
-    out1
+    Ok(out1)
 }

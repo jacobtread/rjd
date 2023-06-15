@@ -192,7 +192,7 @@ impl Display for JavaClassRenderer<'_> {
                         }
                     }
 
-                    let flows = model_control_flow(&code.code);
+                    let flows = model_control_flow(&code.code, &code.exception_table).unwrap();
 
                     if !flows.is_empty() {
                         for flow in flows {

@@ -12,7 +12,7 @@ use nom::{
 use crate::constant_pool::PoolIndex;
 
 pub type Index = u16;
-pub type BranchIndex = u16;
+pub type BranchIndex = i32;
 
 #[derive(Debug, Clone, Copy)]
 pub enum ArrayType {
@@ -257,22 +257,22 @@ pub fn instruction(input: &[u8], wide: bool, pos: i32) -> IResult<&[u8], Instruc
         0x97 => DCmpL,
         0x98 => DCmpG,
 
-        0x99 => return map(be_i16, |value| IfEq((pos + (value as i32)) as u16))(input),
-        0x9a => return map(be_i16, |value| IfNe((pos + (value as i32)) as u16))(input),
-        0x9b => return map(be_i16, |value| IfLt((pos + (value as i32)) as u16))(input),
-        0x9c => return map(be_i16, |value| IfGe((pos + (value as i32)) as u16))(input),
-        0x9d => return map(be_i16, |value| IfGt((pos + (value as i32)) as u16))(input),
-        0x9e => return map(be_i16, |value| IfLe((pos + (value as i32)) as u16))(input),
-        0x9f => return map(be_i16, |value| IfICmpEq((pos + (value as i32)) as u16))(input),
-        0xa0 => return map(be_i16, |value| IfICmpNe((pos + (value as i32)) as u16))(input),
-        0xa1 => return map(be_i16, |value| IfICmpLt((pos + (value as i32)) as u16))(input),
-        0xa2 => return map(be_i16, |value| IfICmpGe((pos + (value as i32)) as u16))(input),
-        0xa3 => return map(be_i16, |value| IfICmpGt((pos + (value as i32)) as u16))(input),
-        0xa4 => return map(be_i16, |value| IfICmpLe((pos + (value as i32)) as u16))(input),
-        0xa5 => return map(be_i16, |value| IfACmpEq((pos + (value as i32)) as u16))(input),
-        0xa6 => return map(be_i16, |value| IfACmpNe((pos + (value as i32)) as u16))(input),
-        0xa7 => return map(be_i16, |value| Goto((pos + (value as i32)) as u16))(input),
-        0xa8 => return map(be_i16, |value| JSr((pos + (value as i32)) as u16))(input),
+        0x99 => return map(be_i16, |value| IfEq(pos + (value as i32)))(input),
+        0x9a => return map(be_i16, |value| IfNe(pos + (value as i32)))(input),
+        0x9b => return map(be_i16, |value| IfLt(pos + (value as i32)))(input),
+        0x9c => return map(be_i16, |value| IfGe(pos + (value as i32)))(input),
+        0x9d => return map(be_i16, |value| IfGt(pos + (value as i32)))(input),
+        0x9e => return map(be_i16, |value| IfLe(pos + (value as i32)))(input),
+        0x9f => return map(be_i16, |value| IfICmpEq(pos + (value as i32)))(input),
+        0xa0 => return map(be_i16, |value| IfICmpNe(pos + (value as i32)))(input),
+        0xa1 => return map(be_i16, |value| IfICmpLt(pos + (value as i32)))(input),
+        0xa2 => return map(be_i16, |value| IfICmpGe(pos + (value as i32)))(input),
+        0xa3 => return map(be_i16, |value| IfICmpGt(pos + (value as i32)))(input),
+        0xa4 => return map(be_i16, |value| IfICmpLe(pos + (value as i32)))(input),
+        0xa5 => return map(be_i16, |value| IfACmpEq(pos + (value as i32)))(input),
+        0xa6 => return map(be_i16, |value| IfACmpNe(pos + (value as i32)))(input),
+        0xa7 => return map(be_i16, |value| Goto(pos + (value as i32)))(input),
+        0xa8 => return map(be_i16, |value| JSr(pos + (value as i32)))(input),
 
         0xa9 => {
             return if wide {
@@ -321,10 +321,10 @@ pub fn instruction(input: &[u8], wide: bool, pos: i32) -> IResult<&[u8], Instruc
             })(input)
         }
 
-        0xc6 => return map(be_i16, |value| IfNull((pos + (value as i32)) as u16))(input),
-        0xc7 => return map(be_i16, |value| IfNonNull((pos + (value as i32)) as u16))(input),
-        0xc8 => return map(be_i32, |value| Goto((pos + value) as u16))(input),
-        0xc9 => return map(be_i32, |value| JSr((pos + value) as u16))(input),
+        0xc6 => return map(be_i16, |value| IfNull(pos + (value as i32)))(input),
+        0xc7 => return map(be_i16, |value| IfNonNull(pos + (value as i32)))(input),
+        0xc8 => return map(be_i32, |value| Goto(pos + value))(input),
+        0xc9 => return map(be_i32, |value| JSr(pos + value))(input),
 
         // TODO: Properly handle
         _ => return fail(input),

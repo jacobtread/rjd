@@ -5,7 +5,10 @@ use std::{
 
 use classfile::{
     attributes::{BorrowedInstrSet, InstructionSeq},
-    constant_pool::{ConstantItem, ConstantPool, Fieldref, InvokeDynamic, Methodref, PoolIndex},
+    constant_pool::{
+        ConstantItem, ConstantPool, Fieldref, InvokeDynamic, MethodNameAndType, Methodref,
+        PoolIndex,
+    },
     inst::{ArrayType, Instruction},
     types::{Class, FieldDesc},
 };
@@ -554,8 +557,7 @@ pub enum Exprent<'a> {
         ty: LocalVariableType,
     },
 
-    InvokeDynamic(InvokeDynamic),
-
+    // Switch statements
     Switch {
         key: Box<Exprent<'a>>,
         ty: SwitchType,
@@ -872,9 +874,41 @@ fn process<'a>(
         | InvokeVirtual(index)
         | InvokeInterface(index)
         | InvokeStatic(index) => {
-            let method: Methodref = pool
-                .get_methodref(*index)
-                .ok_or(ProcessError::InvalidMethodref(*index))?;
+            let ty = match instruction {
+                InvokeStatic(_) => InvokeType::Static,
+                InvokeSpecial(_) => InvokeType::Special,
+                InvokeVirtual(_) => InvokeType::Virtual,
+                InvokeInterface(_) => InvokeType::Interface,
+                InvokeDynamic(_) => InvokeType::Dynamic,
+                _ => panic!("Wasn't expeting to handle any other instructions here"),
+            };
+
+            let method: Methodref = if let InvokeType::Dynamic = ty {
+                // TODO: Version check
+                let dynamic = pool.get_invokedynamic(*index).unwrap();
+
+                let name_and_type = pool
+                    .get_name_and_type(dynamic.name_and_type)
+                    .ok_or(ProcessError::InvalidMethodref(dynamic.name_and_type))?;
+
+                let name_and_type: MethodNameAndType<'a> = pool
+                    .get_method_name_and_type(name_and_type)
+                    .ok_or(ProcessError::InvalidMethodref(dynamic.name_and_type))?;
+
+                Methodref {
+                    // Dummy class for invoke dynamic
+                    class: Class {
+                        class: "Class",
+                        packages: vec!["java", "lang"],
+                        outer_classes: vec![],
+                    },
+                    name: name_and_type.name,
+                    descriptor: name_and_type.descriptor,
+                }
+            } else {
+                pool.get_methodref(*index)
+                    .ok_or(ProcessError::InvalidMethodref(*index))?
+            };
 
             let args_len = method.descriptor.parameters.len();
             let mut args = Vec::with_capacity(args_len);
@@ -883,18 +917,12 @@ fn process<'a>(
             }
             args.reverse();
 
-            let reference = match instruction {
-                InvokeStatic(_) => None,
-                _ => Some(stack.pop_boxed()?),
+            let reference = if let InvokeType::Dynamic = ty {
+                None
+            } else {
+                Some(stack.pop_boxed()?)
             };
 
-            let ty = match instruction {
-                InvokeStatic(_) => InvokeType::Static,
-                InvokeSpecial(_) => InvokeType::Special,
-                InvokeVirtual(_) => InvokeType::Virtual,
-                InvokeInterface(_) => InvokeType::Interface,
-                _ => panic!("Wasn't expeting to handle any other instructions here"),
-            };
             let is_void = matches!(&method.descriptor.return_type, FieldDesc::Void);
 
             let expr = Exprent::Invoke {
@@ -1327,12 +1355,6 @@ fn process<'a>(
                 right,
                 ty: OperationType::Increment,
             })
-        }
-
-        // invoke dynamic
-        InvokeDynamic(index) => {
-            let dynamic = pool.get_invokedynamic(*index).unwrap();
-            stms.push(Exprent::InvokeDynamic(dynamic))
         }
 
         // Reference compare

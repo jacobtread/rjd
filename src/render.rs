@@ -5,10 +5,7 @@ use classfile::{
     class::{AccessFlags, ClassFile},
 };
 
-use crate::{
-    expr::{create_blocks, Block},
-    graph::model_control_flow,
-};
+use crate::{expr::Block, graph::model_control_flow};
 
 struct JavaClassRenderer<'a> {
     class: ClassFile<'a>,

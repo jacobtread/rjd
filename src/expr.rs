@@ -570,6 +570,21 @@ pub enum Exprent<'a> {
 
     /// Represents the creation of a new object
     New(NewType<'a>),
+
+    /// Represents entering and exiting of monitors for
+    /// syncronized blocks
+    Monitor {
+        /// The type of monitor (enter/exit)
+        ty: MonitorType,
+        /// The reference being monitored
+        value: Box<Exprent<'a>>,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub enum MonitorType {
+    Enter,
+    Exit,
 }
 
 #[derive(Debug, Clone)]
@@ -628,6 +643,13 @@ impl<'a> Exprent<'a> {
 impl Display for Exprent<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Exprent::Monitor {
+                ty,
+                value: reference,
+            } => match ty {
+                MonitorType::Enter => write!(f, "syncronized ({}) {{", reference),
+                MonitorType::Exit => f.write_char('}'),
+            },
             Exprent::Value(value) => value.fmt(f),
             Exprent::Operation { right, ty, left } => {
                 if let Some(right) = right {
@@ -1300,8 +1322,21 @@ fn process<'a>(
             })
         }
 
-        // Monitoring (TODO: Find actual right way)
-        MonitorEnter | MonitorExit => stack.pop_discard()?,
+        MonitorEnter => {
+            let value = stack.pop_boxed()?;
+            stms.push(Exprent::Monitor {
+                ty: MonitorType::Enter,
+                value,
+            })
+        }
+
+        MonitorExit => {
+            let value = stack.pop_boxed()?;
+            stms.push(Exprent::Monitor {
+                ty: MonitorType::Exit,
+                value,
+            })
+        }
 
         // New instance creation
         New(index) => {

@@ -4,7 +4,7 @@ use std::{
 };
 
 use classfile::{
-    attributes::{CodeException, CodeOffset, InstructionSeq},
+    attributes::{Code, CodeException, CodeOffset, InstructionSeq},
     constant_pool::ConstantPool,
     inst::Instruction,
 };
@@ -232,6 +232,74 @@ pub fn create_blocks<'seq>(
             )
         })
         .collect())
+}
+
+pub struct ControlFlowGraph<'seq> {
+    pub blocks: HashMap<usize, Block<'seq>>,
+    pub graph: DiGraphMap<usize, i32>,
+    last_id: usize,
+}
+
+impl<'seq> ControlFlowGraph<'seq> {
+    fn first(&self) -> &Block<'seq> {
+        self.blocks.get(&0).expect("Control flow missing first")
+    }
+
+    fn last(&self) -> &Block<'seq> {
+        self.blocks
+            .get(&self.last_id)
+            .expect("Control flow missing last")
+    }
+}
+
+pub fn control_flow(code: &Code) -> Result<ControlFlowGraph<'_>, FlowError> {
+    let input = &code.code;
+    let mut blocks = create_blocks(input, &code.exception_table)?;
+    let mut graph = DiGraphMap::new();
+
+    // Create initial graph points
+    blocks.iter().for_each(|(pos, _)| {
+        graph.add_node(*pos);
+    });
+
+    blocks.iter().for_each(|(pos, block)| {
+        // Add edges
+        block.branches.iter().for_each(|branch| {
+            graph.add_edge(*pos, *branch, 1);
+            // branch = successor
+        });
+    });
+
+    let last = Block {
+        start: input.inner.len(),
+        instructions: BorrowedInstrSeq { inner: &[] },
+        branches: vec![],
+    };
+
+    graph.add_node(last.start);
+
+    blocks.iter().for_each(|(pos, _)| {
+        // If the block has no sucessors
+        if graph
+            .edges_directed(*pos, Direction::Outgoing)
+            .next()
+            .is_none()
+        {
+            // Make it the block before last
+            graph.add_edge(last.start, *pos, 0);
+            // graph.add_edge(*pos, last.start, 0);
+        }
+    });
+
+    let last_id = last.start;
+
+    blocks.insert(last_id, last);
+
+    Ok(ControlFlowGraph {
+        blocks,
+        graph,
+        last_id,
+    })
 }
 
 pub fn model_control_flow<'seq>(

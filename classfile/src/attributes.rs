@@ -1,3 +1,5 @@
+use std::fmt::Debug;
+
 use nom::{
     combinator::{fail, map, map_parser, map_res, rest},
     multi::{count, length_count, length_data},
@@ -132,10 +134,21 @@ pub struct Code {
 pub type CodeOffset = usize;
 
 /// Collection of instructions and their offset
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct InstructionSeq {
     /// The actual list of instructions and offsets
     pub inner: Vec<(CodeOffset, Instruction)>,
+}
+
+impl Debug for InstructionSeq {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut map = f.debug_map();
+
+        for (offset, instr) in &self.inner {
+            map.entry(offset, instr);
+        }
+        map.finish()
+    }
 }
 
 fn code_bytes(input: &[u8]) -> IResult<&[u8], InstructionSeq> {
@@ -449,9 +462,19 @@ fn source_debug_ext(input: &[u8]) -> IResult<&[u8], Attribute> {
     })(input)
 }
 
-#[derive(Debug)]
 pub struct LineNumberTable {
     pub entries: Vec<LineNumber>,
+}
+
+impl Debug for LineNumberTable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut map = f.debug_map();
+
+        for line in &self.entries {
+            map.entry(&line.start_pc, &line.line_number);
+        }
+        map.finish()
+    }
 }
 
 fn line_number_table(input: &[u8]) -> IResult<&[u8], Attribute> {

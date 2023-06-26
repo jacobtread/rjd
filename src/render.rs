@@ -241,7 +241,8 @@ mod test {
         let file = read("tests/ComplexFlow.class").unwrap();
         let (_, class_file) = parse_class_file(&file).unwrap();
 
-        let render = JavaClassRenderer { class: class_file };
-        println!("{}", render)
+        dbg!(&class_file);
+        // let render = JavaClassRenderer { class: class_file };
+        // println!("{}", render)
     }
 }

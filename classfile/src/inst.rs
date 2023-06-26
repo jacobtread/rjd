@@ -336,7 +336,7 @@ pub fn instruction(input: &[u8], wide: bool, pos: i32) -> IResult<&[u8], Instruc
 /// u8 in order to account for wide instructions
 type LocalVariableIndex = u16;
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub enum Instruction {
     /// Load reference from array
     /// [..., arrayref, index → ..., value]
@@ -804,4 +804,191 @@ pub enum Instruction {
         high: i32,
         offsets: Vec<i32>,
     },
+}
+
+// Recursive expansion of Debug macro
+// ===================================
+
+impl core::fmt::Debug for Instruction {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        match self {
+            Instruction::AALoad => f.write_str("aaload"),
+            Instruction::AAStore => f.write_str("aastore"),
+            Instruction::AConstNull => f.write_str("aconst_null"),
+            Instruction::ALoad(f0) => write!(f, "aload {}", f0),
+            Instruction::ANewArray(f0) => write!(f, "anewarray {}", f0),
+            Instruction::AReturn => f.write_str("areturn"),
+            Instruction::ArrayLength => f.write_str("arraylength"),
+            Instruction::AStore(f0) => write!(f, "astore {}", f0),
+            Instruction::AThrow => f.write_str("athrow"),
+            Instruction::BALoad => f.write_str("baload"),
+            Instruction::BAStore => f.write_str("bastore"),
+            Instruction::BIPush(f0) => write!(f, "bipush {}", f0),
+            Instruction::CALoad => f.write_str("caload"),
+            Instruction::CAStore => f.write_str("castore"),
+            Instruction::CheckCast(f0) => write!(f, "checkcast {}", f0),
+            Instruction::D2f => f.write_str("d2f"),
+            Instruction::D2i => f.write_str("d2i"),
+            Instruction::D2l => f.write_str("d2l"),
+            Instruction::DAdd => f.write_str("dadd"),
+            Instruction::DALoad => f.write_str("daload"),
+            Instruction::DAStore => f.write_str("dastore"),
+            Instruction::DCmpG => f.write_str("dcmpg"),
+            Instruction::DCmpL => f.write_str("dcmpl"),
+            Instruction::DConst(f0) => write!(f, "dconst {}", f0),
+            Instruction::DDiv => f.write_str("ddiv"),
+            Instruction::DLoad(f0) => write!(f, "dload {}", f0),
+            Instruction::DMul => f.write_str("dmul"),
+            Instruction::DNeg => f.write_str("dneg"),
+            Instruction::DRem => f.write_str("drem"),
+            Instruction::DReturn => f.write_str("dreturn"),
+            Instruction::DStore(f0) => write!(f, "dstore({})", f0),
+            Instruction::DSub => f.write_str("dsub"),
+            Instruction::Dup => f.write_str("dup"),
+            Instruction::DupX1 => f.write_str("dupX1"),
+            Instruction::DupX2 => f.write_str("dupX2"),
+            Instruction::Dup2 => f.write_str("dup2"),
+            Instruction::Dup2X1 => f.write_str("dup2X1"),
+            Instruction::Dup2X2 => f.write_str("dup2X2"),
+            Instruction::F2d => f.write_str("f2d"),
+            Instruction::F2i => f.write_str("f2i"),
+            Instruction::F2l => f.write_str("f2l"),
+            Instruction::FAdd => f.write_str("fadd"),
+            Instruction::FALoad => f.write_str("faload"),
+            Instruction::FAStore => f.write_str("fastore"),
+            Instruction::FCmpL => f.write_str("fcmpl"),
+            Instruction::FCmpG => f.write_str("fcmpg"),
+            Instruction::FConst(f0) => write!(f, "fconst {}", f0),
+            Instruction::FDiv => f.write_str("dfiv"),
+            Instruction::FLoad(f0) => write!(f, "fload {}", f0),
+            Instruction::FMul => f.write_str("fmul"),
+            Instruction::FNeg => f.write_str("fneg"),
+            Instruction::FRem => f.write_str("frem"),
+            Instruction::FReturn => f.write_str("freturn"),
+            Instruction::FStore(f0) => write!(f, "fstore({})", f0),
+            Instruction::FSub => f.write_str("fsub"),
+            Instruction::GetField(f0) => write!(f, "getfield {}", f0),
+            Instruction::GetStatic(f0) => write!(f, "getstatic {}", f0),
+            Instruction::Goto(f0) => write!(f, "goto {}", f0),
+            Instruction::I2b => f.write_str("i2b"),
+            Instruction::I2c => f.write_str("i2c"),
+            Instruction::I2d => f.write_str("i2d"),
+            Instruction::I2f => f.write_str("i2f"),
+            Instruction::I2l => f.write_str("i2l"),
+            Instruction::I2s => f.write_str("i2s"),
+            Instruction::IAdd => f.write_str("iadd"),
+            Instruction::IALoad => f.write_str("iaload"),
+            Instruction::IAnd => f.write_str("iand"),
+            Instruction::IAStore => f.write_str("iastore"),
+            Instruction::IConst(f0) => write!(f, "iconst {}", f0),
+            Instruction::IDiv => f.write_str("idiv"),
+            Instruction::IfACmpEq(f0) => write!(f, "if_acmp_eq {}", f0),
+            Instruction::IfACmpNe(f0) => write!(f, "if_acmp_ne {}", f0),
+
+            Instruction::IfICmpEq(f0) => write!(f, "if_icmp_eq {}", f0),
+            Instruction::IfICmpNe(f0) => write!(f, "if_icmp_ne {}", f0),
+
+            Instruction::IfICmpLt(f0) => write!(f, "if_icmp_lt {}", f0),
+            Instruction::IfICmpGt(f0) => write!(f, "if_icmp_gt {}", f0),
+
+            Instruction::IfICmpLe(f0) => write!(f, "if_icmp_le {}", f0),
+            Instruction::IfICmpGe(f0) => write!(f, "if_icmp_ge {}", f0),
+
+            Instruction::IfEq(f0) => write!(f, "if_eq {}", f0),
+            Instruction::IfNe(f0) => write!(f, "if_ne {}", f0),
+            Instruction::IfLt(f0) => write!(f, "if_lt {}", f0),
+            Instruction::IfGe(f0) => write!(f, "if_ge {}", f0),
+            Instruction::IfGt(f0) => write!(f, "if_gt {}", f0),
+            Instruction::IfLe(f0) => write!(f, "if_le {}", f0),
+            Instruction::IfNonNull(f0) => write!(f, "ifnonnull {}", f0),
+            Instruction::IfNull(f0) => write!(f, "ifnull {}", f0),
+            Instruction::IInc { index, value } => {
+                write!(f, "iinc index: {} value: {}", index, value)
+            }
+            Instruction::ILoad(f0) => write!(f, "iload {}", f0),
+
+            Instruction::IMul => f.write_str("imul"),
+            Instruction::INeg => f.write_str("ineg"),
+            Instruction::InstanceOf(f0) => write!(f, "instanceof {}", f0),
+            Instruction::InvokeDynamic(f0) => write!(f, "invokedynamic {}", f0),
+            Instruction::InvokeInterface(f0) => write!(f, "invokeinterface {}", f0),
+            Instruction::InvokeSpecial(f0) => write!(f, "invokespecial {}", f0),
+            Instruction::InvokeStatic(f0) => write!(f, "invokestatic {}", f0),
+            Instruction::InvokeVirtual(f0) => write!(f, "invokevirtual {}", f0),
+
+            Instruction::IOr => f.write_str("ior"),
+            Instruction::IRem => f.write_str("irem"),
+            Instruction::IReturn => f.write_str("ireturn"),
+            Instruction::IShL => f.write_str("ishl"),
+            Instruction::IShR => f.write_str("ishr"),
+            Instruction::IStore(f0) => write!(f, "istore {}", f0),
+            Instruction::ISub => f.write_str("isub"),
+            Instruction::IUShR => f.write_str("iushr"),
+            Instruction::IXOr => f.write_str("ixor"),
+            Instruction::JSr(f0) => write!(f, "jsr {}", f0),
+            Instruction::L2d => f.write_str("l2d"),
+            Instruction::L2f => f.write_str("l2f"),
+            Instruction::L2i => f.write_str("l2i"),
+            Instruction::LAdd => f.write_str("ladd"),
+            Instruction::LALoad => f.write_str("laload"),
+            Instruction::LAnd => f.write_str("land"),
+            Instruction::LAStore => f.write_str("lastore"),
+            Instruction::LCmp => f.write_str("lcmp"),
+            Instruction::LConst(f0) => write!(f, "lconst {}", f0),
+            Instruction::LoadConst(f0) => write!(f, "loadconst {}", f0),
+            Instruction::LDiv => f.write_str("ldiv"),
+            Instruction::LLoad(f0) => write!(f, "lload {}", f0),
+            Instruction::LMul => f.write_str("LMul"),
+            Instruction::LNeg => f.write_str("LNeg"),
+            Instruction::LookupSwitch { default, pairs } => {
+                write!(f, "lookupswitch default: {} pairs: {:?}", default, pairs)
+            }
+
+            Instruction::LOr => f.write_str("lor"),
+            Instruction::LRem => f.write_str("lrem"),
+            Instruction::LReturn => f.write_str("lreturn"),
+            Instruction::LShL => f.write_str("lshl"),
+            Instruction::LShR => f.write_str("lshr"),
+            Instruction::LStore(f0) => write!(f, "lstore {}", f0),
+            Instruction::LSub => f.write_str("lsub"),
+            Instruction::LUShR => f.write_str("lushr"),
+            Instruction::LXOr => f.write_str("lxor"),
+            Instruction::MonitorEnter => f.write_str("monitorenter"),
+            Instruction::MonitorExit => f.write_str("monitorexit"),
+            Instruction::MultiANewArray { index, dimensions } => {
+                write!(
+                    f,
+                    "multianewarray index: {} dimensions: {}",
+                    index, dimensions
+                )
+            }
+
+            Instruction::New(f0) => write!(f, "new {}", f0),
+            Instruction::NewArray(f0) => write!(f, "newarray {}", f0),
+            Instruction::Nop => f.write_str("nop"),
+            Instruction::Pop => f.write_str("pop"),
+            Instruction::Pop2 => f.write_str("pop2"),
+            Instruction::PutField(f0) => write!(f, "putfield {}", f0),
+            Instruction::PutStatic(f0) => write!(f, "putstatic {}", f0),
+            Instruction::Ret(f0) => write!(f, "ret {}", f0),
+
+            Instruction::Return => f.write_str("return"),
+            Instruction::SALoad => f.write_str("saload"),
+            Instruction::SAStore => f.write_str("sastore"),
+            Instruction::SIPush(f0) => write!(f, "sipush {}", f0),
+            Instruction::Swap => f.write_str("swap"),
+            Instruction::TableSwitch {
+                default,
+                low,
+                high,
+                offsets,
+            } => {
+                write!(
+                    f,
+                    "tableswitch default: {} low: {} high: {} offset: {:?}",
+                    default, low, high, offsets
+                )
+            }
+        }
+    }
 }
